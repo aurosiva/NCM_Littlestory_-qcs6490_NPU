@@ -136,8 +136,32 @@ possible, use shared buffers with batch 1 (105 ms).
 | NCM on the NPU (first version) | 23% | 941 MHz 94% of the time, peaks of 1306 MHz |
 
 In the first version the NPU worked in short bursts and waited for the CPU in between. That idle
-time is what the shared buffers and the two batches in flight removed. sysMon has not been re-run
-on the new version.
+time is what the shared buffers and the two batches in flight removed (next table). These
+captures were not pinned to the fast cores; pinned, the first version kept the NPU 45% busy.
+
+### First version vs new version, inside the NPU
+
+Second round, same session, pinned to the fast cores. NPU compute per story comes from
+`qnn-net-run` profiling (48 calls per graph, real inputs); "NPU busy" is that compute divided by
+the time per story.
+
+| | first version | shared buffers | batch 8, 2 in flight |
+|---|---|---|---|
+| ms per story | 125.6 | 105.3 | 66.1 |
+| NPU compute per story | 58 ms | 58 ms | 60 ms |
+| **NPU busy** | **46%** | **55%** | **91%** |
+| sysMon utilisation | 45% | 48% | 30%* |
+| sysMon average NPU clock | 949 MHz | 950 MHz | 1246 MHz (up to 1440) |
+| DDR traffic per story (sysMon) | 9 MB | 10 MB | 152 MB |
+
+\* sysMon slowed this setup from 66 to about 200 ms per story, so its utilisation is not
+representative. Its clock and DDR numbers are: a batch of 8 no longer fits in the 2 MB VTCM and
+spills to DDR, and the NPU raises its clock to compensate. sysMon captures of an idle board and
+of NCM on the CPU both stay at 0% and 364 MHz.
+
+NPU time per call by batch size: generator 4.8 / 21.8 / 39.5 ms for 1 / 4 / 8 stories (4.8 / 5.5 /
+4.9 ms per story), decoder 1.0 / 6.8 / 6.1 ms. The NPU's work per story does not shrink with
+batching; only the time around it does. Every size uses 2 HVX threads.
 
 ### Accuracy of the quantized models
 
@@ -369,11 +393,13 @@ binary on recorded inputs with `--profiling_level basic`. Each run writes
 ```bash
 # board
 cd ~/ncm_npu
-~/ncm-venv/bin/python run_ncm_npu.py --bits a16w8mix -n 200 --out /tmp/s.txt &
-sleep 2
+taskset -c 4-7 ~/ncm-venv/bin/python run_ncm_npu.py --bits a16w8mix -n 150 --out /tmp/s.txt &
+# new version instead: add  --engine shm --batch 1  (and -n 200)
+sleep 5                                   # let it load the models and start generating
 sudo ~/sysMonAppLE profiler --q6 cdsp --duration 10
 wait
 sudo chmod 644 /tmp/sysmon_cdsp.bin
+ls -l /tmp/sysmon_cdsp.bin                # ~900 KB when the NPU was busy; ~9 KB means it captured nothing
 
 # laptop
 scp radxa@<board-ip>:/tmp/sysmon_cdsp.bin .
@@ -418,13 +444,17 @@ report. Notes for this board:
 9. **Batching only pays when something overlaps.** Once call overhead is small, the NPU's time
    grows with the batch. Batching helped because it made each NPU call long enough to hide the
    CPU work of a second batch behind it.
-10. **The DSP can hang.** Once during testing every NPU call failed and the kernel logged
+10. **The DSP can hang.** Twice during testing every NPU call failed and the kernel logged
    `glink-edge: intent request timed out` every 10 s. The cDSP is in "attached" state, so Linux
-   cannot restart it; only a reboot helped. It did not recur in 60+ runs; the cause is unknown.
-11. **Use the static ONNX exporter** (`dynamo=False`, no dynamic axes) for QAIRT.
-12. **Match versions.** Context binaries from QAIRT 2.50 need the 2.50 runtime on the board; the
+   cannot restart it; only a reboot helped. The second time followed a batch-8, 2-lane run recorded
+   by sysMon, whose NPU session took 11 s to close instead of 3–7 ms. Plain runs of the same
+   setup close normally; the root cause is unknown. Avoid sysMon on the multi-lane setup.
+11. **sysMon changes what it measures.** Sampling every 1 ms slowed the first version by ~10% but
+   the batch-8, 2-lane setup by 3×. Cross-check with `qnn-net-run` profiling, which does not.
+12. **Use the static ONNX exporter** (`dynamo=False`, no dynamic axes) for QAIRT.
+13. **Match versions.** Context binaries from QAIRT 2.50 need the 2.50 runtime on the board; the
    board's stock 2.42 runtime rejects them.
-13. **Training stability.** The tokenizer diverged twice before switching to VAR-style residual
+14. **Training stability.** The tokenizer diverged twice before switching to VAR-style residual
    quantization (detached residuals, one straight-through gradient) and a normalized encoder output.
 
 ---
@@ -435,7 +465,9 @@ report. Notes for this board:
   levels (~45 ms per story) still run in numpy; with fewer lanes or a faster NPU it would show
   again. Moving it into C, or the codebook head onto the NPU, has not been tried.
 - No NPU performance mode is requested (`--perf_profile burst` changed the profiled call time by
-  only ~5%). The new version has not been profiled with sysMon.
+  only ~5%).
+- Batch 8 spills out of VTCM (15× the DDR traffic per story). A graph tiled to fit VTCM, or
+  more HVX threads, might lower the ~58 ms of NPU compute per story; not tried.
 - The 8-bit build was not rebuilt for batching or re-measured with pinning.
 - Agreement with fp32 is measured per level with identical inputs. NPU-generated stories have
   not been scored by GPT-2 separately.

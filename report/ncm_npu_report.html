@@ -139,7 +139,7 @@ footer { font-size: 12px; color: var(--ink-3); display: grid; gap: 4px; }
 
   <section>
     <h2>Is the NPU doing the work?</h2>
-    <p>Three 10-second sysMon captures of the NPU (the "compute DSP"): nothing running, NCM running on the CPU, and NCM running on the NPU with the first version (pipe, one story per call). The line is the NPU's effective work rate, its real busy cycles per second. The CPU run leaves the NPU as idle as doing nothing at all.</p>
+    <p>Three 10-second sysMon captures of the NPU (the "compute DSP") from the first round: nothing running, NCM running on the CPU, and NCM running on the NPU with the first version (pipe, one story per call, not pinned to the fast cores). The line is the NPU's effective work rate, its real busy cycles per second. The CPU run leaves the NPU as idle as doing nothing at all.</p>
     <div class="panel" id="lanes">
       <p class="chart-title">NPU effective work rate (MHz), 50 ms averages</p>
       <p class="chart-sub">Same scale in all three panels. Hover for values.</p>
@@ -157,6 +157,47 @@ footer { font-size: 12px; color: var(--ink-3); display: grid; gap: 4px; }
         <p class="chart-sub">Share of each 10 s capture.</p>
         <div class="legend" id="clockLegend"></div>
         <svg id="clockSvg" viewBox="0 0 440 170" role="img" aria-label="Stacked bars of time at each clock level"></svg>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>First version vs new version, inside the NPU</h2>
+    <p>A second round compared the versions under identical conditions (pinned to the fast cores, starting below 60 °C). QNN's own profiler gives the NPU's compute time per call; dividing it by the measured time per story gives the share of each story the NPU spends computing. sysMon agrees for the first version (45% vs 46%).</p>
+    <div class="panel" id="busy">
+      <p class="chart-title">Share of each story the NPU spends computing, higher is better</p>
+      <p class="chart-sub">NPU compute per story (QNN profiling) ÷ time per story. Hover for values.</p>
+      <svg id="busySvg" viewBox="0 0 900 150" role="img" aria-label="Bar chart: first version 46%, shared buffers 55%, batch 8 with 2 in flight 91%"></svg>
+      <details><summary>Show the numbers</summary><div class="tbl"><table id="busyTbl"></table></div></details>
+    </div>
+    <div class="grid2">
+      <div class="panel tbl">
+        <p class="chart-title">NPU time per call, by batch size</p>
+        <p class="chart-sub">qnn-net-run, 48 calls each, real inputs. Story total = 12 levels + 1 decode.</p>
+        <table>
+          <thead><tr><th>Batch</th><th class="n">Gen. call</th><th class="n">÷ stories</th><th class="n">Dec. call</th><th class="n">Story total</th></tr></thead>
+          <tbody>
+            <tr><td>1</td><td class="n">4.8 ms</td><td class="n">4.8 ms</td><td class="n">1.0 ms</td><td class="n">58 ms</td></tr>
+            <tr><td>4</td><td class="n">21.8 ms</td><td class="n">5.5 ms</td><td class="n">6.8 ms</td><td class="n">67 ms</td></tr>
+            <tr><td>8</td><td class="n">39.5 ms</td><td class="n">4.9 ms</td><td class="n">6.1 ms</td><td class="n">60 ms</td></tr>
+          </tbody>
+        </table>
+        <p class="chart-sub" style="margin:8px 0 0">The NPU's work per story does not shrink with batching; only the time around it does. Only 2 HVX threads are used at every batch size.</p>
+      </div>
+      <div class="panel tbl">
+        <p class="chart-title">sysMon, 10 s per capture</p>
+        <p class="chart-sub">Same session; NCM on the CPU stays at 0%.</p>
+        <table>
+          <thead><tr><th>Capture</th><th class="n">Util.</th><th class="n">Avg clock</th><th class="n">DDR per story</th></tr></thead>
+          <tbody>
+            <tr><td>Nothing running</td><td class="n">0%</td><td class="n">364 MHz</td><td class="n">–</td></tr>
+            <tr><td>NCM on the CPU</td><td class="n">0%</td><td class="n">364 MHz</td><td class="n">–</td></tr>
+            <tr><td>First version</td><td class="n">45%</td><td class="n">949 MHz</td><td class="n">9 MB</td></tr>
+            <tr><td>Shared buffers</td><td class="n">48%</td><td class="n">950 MHz</td><td class="n">10 MB</td></tr>
+            <tr><td>Batch 8, 2 in flight*</td><td class="n">30%</td><td class="n">1246 MHz</td><td class="n">152 MB</td></tr>
+          </tbody>
+        </table>
+        <p class="chart-sub" style="margin:8px 0 0">* sysMon slowed this setup from 66 to about 200 ms per story, so its utilisation is not representative. Its clock and DDR traffic are: a batch of 8 no longer fits in the 2 MB VTCM, spills to DDR (15× the traffic per story), and the NPU raises its clock up to 1440 MHz to compensate.</p>
       </div>
     </div>
   </section>
@@ -194,7 +235,8 @@ footer { font-size: 12px; color: var(--ink-3); display: grid; gap: 4px; }
       <ul>
         <li>Speed: warm process, 96 stories, two runs per setup, each starting below 60 °C (the board reaches 78–86 °C under load). NPU runs pinned to cores 4–7 with 4 numpy threads; the CPU's best setting is 4 onnxruntime threads and 1 numpy thread on all cores (pinning made the CPU slower: 305 ms at one story per batch). Pinned runs repeat within about 1%.</li>
         <li>An earlier, unpinned round put the CPU at 808 ms (8 onnxruntime threads) and 586 ms (default settings): thread settings matter as much as the hardware.</li>
-        <li>The DSP hung once during testing (kernel log: glink "intent request timed out"; every NPU call failed until a reboot). It did not recur in 60+ runs afterwards; the cause is unknown.</li>
+        <li>The DSP hung twice during testing (kernel log: glink "intent request timed out"; every NPU call failed until a reboot). The second time it followed a batch-8, 2-lane run recorded by sysMon whose NPU session took 11 s to close instead of a few ms. Normal runs of the same setup close in 3–7 ms and have not caused a hang; the root cause is unknown.</li>
+        <li>The first-round sysMon capture (23%) was unpinned; pinned to the fast cores, the same first version kept the NPU 45% busy.</li>
         <li>sysMon was off for speed runs. With sysMon recording, the first NPU version slowed to about 177 ms per story.</li>
         <li>sysMon reports two active-time figures for the NPU run (2.8 s and 3.6 s of 10 s). Utilisation (23%) is the effective work rate divided by the clock, which these samples reproduce (229 / 958 MHz).</li>
         <li>Agreement for the CPU INT8 build was checked on the laptop with 8 stories; the NPU builds on the board with 16. NPU-generated stories have not been scored by GPT-2 separately.</li>
@@ -274,6 +316,34 @@ function drawSpeed() {
   });
   el("line", { x1: L, x2: L, y1: top - 6, y2: top + row * SPEED.length - 10, stroke: css("--ink-3"), "stroke-width": 1 }, svg);
   table("speedTbl", ["Setup", "ms per story"], SPEED.map(d => [d.label, d.ms]));
+}
+
+/* ---------- NPU busy share ---------- */
+const BUSY = [
+  { label: "First version (pipe)", npu: 58, ms: 125.6 },
+  { label: "Shared buffers", npu: 58, ms: 105.3 },
+  { label: "Batch 8, 2 in flight", npu: 60, ms: 66.1, rec: true },
+];
+function drawBusy() {
+  const svg = document.getElementById("busySvg"); svg.innerHTML = "";
+  const panel = document.getElementById("busy");
+  const L = 250, R = 860, top = 14, row = 40, bh = 22, x = v => L + (R - L) * v / 100;
+  for (let v = 0; v <= 100; v += 25) {
+    el("line", { x1: x(v), x2: x(v), y1: top - 4, y2: top + row * BUSY.length - 10, stroke: css("--grid"), "stroke-width": 1 }, svg);
+    el("text", { x: x(v), y: top + row * BUSY.length + 6, "text-anchor": "middle", class: "axis num" }, svg, v + "%");
+  }
+  BUSY.forEach((d, i) => {
+    const y = top + i * row, pct = Math.round(100 * d.npu / d.ms);
+    el("text", { x: L - 12, y: y + bh / 2 + 4, "text-anchor": "end", class: d.rec ? "strong" : "" }, svg, d.label);
+    const p = el("path", { d: roundRight(L, y, x(pct) - L, bh, 4), fill: css("--npu"), class: "bar" }, svg);
+    el("text", { x: x(pct) + 8, y: y + bh / 2 + 4, class: "num " + (d.rec ? "strong" : "") }, svg, pct + "%");
+    const hit = el("rect", { x: 0, y: y - 8, width: 900, height: row - 4, fill: "transparent" }, svg);
+    hit.addEventListener("mousemove", () => { p.style.opacity = .8; showTip(panel, svg, x(pct), y, `${d.label}<br><b>${d.npu} ms</b> NPU compute of <b>${d.ms} ms</b> per story`); });
+    hit.addEventListener("mouseleave", () => { p.style.opacity = 1; hideTip(panel); });
+  });
+  el("line", { x1: L, x2: L, y1: top - 6, y2: top + row * BUSY.length - 10, stroke: css("--ink-3"), "stroke-width": 1 }, svg);
+  table("busyTbl", ["Setup", "NPU compute per story (ms)", "Time per story (ms)", "NPU busy"],
+        BUSY.map(d => [d.label, d.npu, d.ms, Math.round(100 * d.npu / d.ms) + "%"]));
 }
 
 /* ---------- split ---------- */
@@ -433,7 +503,7 @@ function drawAcc() {
   table("accTbl", ["Build", ...LEVEL_SIZES.map((_, i) => "L" + (i + 1)), "Decoder"], ACC.map(s => [s.name, ...s.v, s.dec]));
 }
 
-function drawAll() { drawSpeed(); drawSplit(); drawLanes(); drawZoom(); drawClock(); drawAcc(); }
+function drawAll() { drawSpeed(); drawSplit(); drawLanes(); drawZoom(); drawClock(); drawBusy(); drawAcc(); }
 drawAll();
 window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", drawAll);
 new MutationObserver(drawAll).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
