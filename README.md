@@ -33,6 +33,7 @@ comparison with charts (speed, sysMon NPU profiles, accuracy per level).
 8. [Lessons and pitfalls](#lessons-and-pitfalls)
 9. [Limitations](#limitations)
 10. [Credits](#credits)
+11. [License](#license)
 
 ---
 
@@ -371,3 +372,8 @@ report. Notes for this board:
 
 Qualcomm, Hexagon and QAIRT are trademarks of Qualcomm Technologies, Inc. This is an independent
 project, not affiliated with or endorsed by Qualcomm.
+
+## License
+
+The code in this repository is released under the [MIT License](LICENSE). It covers only the
+files here: the Qualcomm SDKs, the TinyStories dataset and any trained weights keep their own terms.
