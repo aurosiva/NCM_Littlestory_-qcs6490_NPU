@@ -14,10 +14,10 @@ step is predicted in parallel, which suits an NPU well.
 | Training | laptop RTX 5060 (8 GB), TinyStories, about 6.5 hours total |
 | Target | Radxa Dragon Q6A, Qualcomm QCS6490, Hexagon v68 NPU, Ubuntu 24.04 |
 | NPU toolchain | Qualcomm QAIRT 2.50 (converter, quantizer, HTP context binaries) |
-| Result | **143 ms per story on the NPU, 1.9× faster than a tuned CPU** |
+| Result | **66 ms per story on the NPU, 2.9× faster than the best CPU setting** (191 ms) |
 
 **[View the interactive report online](https://aurosiva.github.io/NCM_Littlestory_-qcs6490_NPU/)**: the full
-comparison with charts (speed, sysMon NPU profiles, accuracy per level). The same page is in
+comparison with charts (speed, where the time goes, sysMon NPU profiles, accuracy per level). The same page is in
 [`report/ncm_npu_report.html`](report/ncm_npu_report.html).
 
 ---
@@ -77,19 +77,55 @@ the official code was used as a reference for the `v2` design.
 
 All numbers were measured on the board or laptop, as described in each table.
 
-### Speed (Radxa Q6A, warm, 48 stories)
+### Speed (Radxa Q6A, warm, 96 stories, 2 runs each, each run starting below 60 °C)
 
 | setup | ms per story |
 |---|---|
-| CPU, onnxruntime INT8, 8 threads | 808 |
-| CPU, default thread settings | 586 |
-| CPU, tuned (4 onnxruntime threads, 1 numpy thread) | 276 |
-| CPU, tuned, 4 stories per batch | 196 |
-| **NPU, 16-bit mixed precision (recommended)** | **143** |
-| NPU, 8-bit | 107 |
+| CPU, tuned (4 onnxruntime threads, 1 numpy thread), 1 story at a time | 276 |
+| CPU, tuned, 8 stories per batch | 191 |
+| NPU, first version: `qnn_serve` pipe, 1 story per call | 125.6 |
+| NPU, shared buffers | 105.3 |
+| NPU, shared buffers, 4 stories per call | 99.5 |
+| NPU, shared buffers, 2 batches of 4 in flight | 75.2 |
+| **NPU, shared buffers, 2 batches of 8 in flight (fastest)** | **66.1** |
 
-Of the NPU's 143 ms, 98 ms is inside the 13 NPU calls (including data transfer) and 45 ms is
-Python work on the CPU between calls.
+All NPU rows use the 16-bit mixed build and are pinned to the four fast cores
+(`taskset -c 4-7`). The CPU rows are unpinned, which is their best case: pinned, the CPU took 305 ms
+at one story per batch. An earlier unpinned round measured the first NPU version at 143 ms and the
+8-bit build at 107 ms; the CPU at 808 ms with 8 onnxruntime threads and 586 ms with default settings.
+
+### Where the time went, and what fixed it
+
+Profiling the first version (`qnn-net-run --profiling_level basic` for the NPU calls, plus
+`npu/profile_story.py` for the Python side) split its ~146 ms per story into:
+
+| part | ms | |
+|---|---|---|
+| NPU computing (12 × 4.15 ms generator + 0.85 ms decoder) | ~51 | 35% |
+| QNN call overhead (12 × 0.84 + 2.2 ms) | ~12 | 8% |
+| Pipe to `qnn_serve` + 8/16-bit conversion in Python | ~37 | 25% |
+| CPU math between levels (sampling, codebook head, adding levels) | ~46 | 32% |
+
+The fixed per-call costs (~49 ms) were as large as the NPU's compute, and the NPU sat idle while
+the CPU sampled. Three changes:
+
+1. **Shared buffers** (126 → 105 ms). `npu/qnn_lib.c` is built as `libncm_qnn.so` and loaded by
+   Python (`npu/qnn_fast.py`), so there is no server process and no pipe. Every input and output
+   is allocated with rpcmem (memory the DSP maps directly), registered with QNN, and exposed to
+   numpy as an array. The batched decoder also does its argmax on the NPU and returns 1,024 token
+   ids instead of a 1 MB logits table: a decode call went from 6–8 ms to about 1 ms.
+2. **Batching** (105 → 100 ms). `export_npu.py --batch B` stacks B stories on the first axis
+   (`zin [B·128, d]`); all stories are at the same level, so they share the level embedding and
+   the mask. On its own this saves little: the NPU needs about 4.75 ms per story per level, so 8
+   stories take 8× as long, and only the small leftover call overhead is shared.
+3. **Two batches in flight** (100 → 66 ms). `--lanes 2` loads the graphs twice (separate buffers)
+   and runs one thread per batch. While one batch samples on the CPU, the NPU runs the other; the
+   GIL is released during the NPU call and inside numpy. The CPU work (~45 ms per story) now hides
+   behind the NPU work (~57 ms), which is the new limit. Running the lanes in parallel gives
+   exactly the same tokens as running them one after the other (checked on 48 stories).
+
+The trade-off is latency: a batch of 8 finishes after about 0.5 s. For one story as fast as
+possible, use shared buffers with batch 1 (105 ms).
 
 ### Does the NPU do the work? (Qualcomm sysMon, 10 s captures)
 
@@ -97,10 +133,11 @@ Python work on the CPU between calls.
 |---|---|---|
 | nothing running | 0% | 365 MHz |
 | NCM on the CPU | 0% | 365 MHz |
-| NCM on the NPU | 23% | 941 MHz 94% of the time, peaks of 1306 MHz |
+| NCM on the NPU (first version) | 23% | 941 MHz 94% of the time, peaks of 1306 MHz |
 
-The NPU works in short bursts and waits for the CPU in between, so the Python side is now the
-bottleneck.
+In the first version the NPU worked in short bursts and waited for the CPU in between. That idle
+time is what the shared buffers and the two batches in flight removed. sysMon has not been re-run
+on the new version.
 
 ### Accuracy of the quantized models
 
@@ -110,6 +147,7 @@ model (16 stories; level 1 always matches):
 | build | levels 2–12 | decoder tokens |
 |---|---|---|
 | NPU 16-bit mixed | 91–98% | 99.7% |
+| NPU 16-bit mixed, batched rebuilds (batch 1, 4, 8) | 88–98% | 99.2–99.7% |
 | NPU 8-bit | 59–92% | 99.4% |
 | CPU INT8 (laptop check, 8 stories) | 92–100% | – |
 
@@ -149,8 +187,13 @@ npu/
   make_overrides.py  8-bit overrides for the attention matmuls (v68 limit)
   build.sh           qairt-converter → qairt-quantizer → qnn-context-binary-generator
   qenv.sh            QAIRT environment setup
-  qnn_serve.c        small C server that keeps the NPU models loaded (QNN C API)
-  run_ncm_npu.py     NPU runner and accuracy check for the board
+  qnn_serve.c        first version: C server that keeps the NPU models loaded, talks over a pipe
+  qnn_lib.c          shared-buffer version: libncm_qnn.so, loaded in-process, rpcmem buffers
+  qnn_fast.py        Python driver for libncm_qnn.so (numpy views of the NPU buffers)
+  run_ncm_npu.py     NPU runner (--engine pipe|shm, --batch, --lanes) and accuracy check
+  profile_story.py   per-stage timing of the NPU pipeline
+  demo_ncm.py        live coarse-to-fine demo in the terminal; can record to JSON lines
+  render_demo.py     turns a demo recording into a GIF and MP4
 report/
   ncm_npu_report.html            the comparison page (self-contained)
   ncm_npu_report.template.html   the same page before the data is filled in
@@ -225,6 +268,10 @@ python npu/make_overrides.py npu/build/gen.onnx > npu/build/gen_overrides.json
 python npu/make_overrides.py npu/build/dec.onnx > npu/build/dec_overrides.json
 bash npu/build.sh 16 8      # → npu/build/gen_a16w8mix.bin, dec_a16w8mix.bin  (recommended)
 bash npu/build.sh 8 8       # → npu/build/gen_a8w8.bin, dec_a8w8.bin          (faster, less accurate)
+
+# batched graphs (B stories per call, decoder returns token ids); overrides are made automatically
+python npu/export_npu.py --ckpt ckpt_v2 --out npu/build --batch 8
+bash npu/build.sh 16 8 8    # → npu/build/gen_b8_a16w8mix.bin, dec_b8_a16w8mix.bin
 ```
 
 What the export does differently from the CPU export:
@@ -255,6 +302,10 @@ scp npu/qnn_serve.c npu/run_ncm_npu.py npu/build/*_a16w8mix.bin npu/build/*_a8w8
     npu/build/cpu_head.npz $B:~/ncm_npu/
 ssh $B 'cd ~/ncm_npu && cp ~/ncm_v2/{tok_weights.npz,run_ncm.py} . && cp -r ~/ncm_v2/bpe . \
         && gcc -O2 -Iinc/QNN qnn_serve.c -ldl -o qnn_serve'
+
+# shared-buffer version
+scp npu/qnn_lib.c npu/qnn_fast.py npu/profile_story.py npu/build/*_b8_a16w8mix.bin $B:~/ncm_npu/
+ssh $B 'cd ~/ncm_npu && gcc -O2 -shared -fPIC -Iinc/QNN qnn_lib.c -ldl -o libncm_qnn.so'
 ```
 
 ### 3.3 Generate
@@ -265,6 +316,13 @@ cd ~/ncm_npu
 ~/ncm-venv/bin/python run_ncm_npu.py -n 4 --bits a16w8mix --seed 0   # repeatable
 ~/ncm-venv/bin/python run_ncm_npu.py -n 100 --bits a16w8mix --out stories.txt
 ~/ncm-venv/bin/python run_ncm_npu.py --check 16 --bits a16w8mix      # agreement with fp32
+
+# fastest: shared buffers, 8 stories per call, 2 batches in flight, fast cores only
+taskset -c 4-7 ~/ncm-venv/bin/python run_ncm_npu.py -n 16 --engine shm --batch 8 --lanes 2 --bits a16w8mix
+
+# where the time goes, per stage
+taskset -c 4-7 ~/ncm-venv/bin/python profile_story.py -n 96                                   # first version
+taskset -c 4-7 ~/ncm-venv/bin/python profile_story.py -n 96 --engine shm --batch 8 --lanes 2
 ```
 
 The `rpcmem_init` line at start-up comes from Qualcomm's library and is harmless. To confirm
@@ -291,6 +349,16 @@ tokens ◄─ dequantize, argmax ───────────────�
 `qnn_serve` loads both context binaries once, prints each tensor's name, shape and quantization
 parameters, then runs requests from a pipe. Python reads those parameters, so a rebuilt model
 works without code changes.
+
+With `--engine shm` the same loop runs without the pipe: `libncm_qnn.so` lives inside the Python
+process, each tensor's buffer is rpcmem memory shared with the DSP, and Python quantizes straight
+into it. The level embedding and mask for each level are quantized once at start-up.
+
+To profile the NPU calls themselves, copy `qnn-net-run` and `qnn-profile-viewer` from
+`$QAIRT_SDK_ROOT/bin/aarch64-ubuntu-gcc9.4/` (plus `libQnnHtpNetRunExtensions.so` and
+`libQnnHtpProfilingReader.so` from `lib/aarch64-ubuntu-gcc9.4/`) to the board and run a context
+binary on recorded inputs with `--profiling_level basic`. Each run writes
+`qnn-profiling-data_N.log`; open the numbered file (the unnumbered link it creates is broken).
 
 ---
 
@@ -321,7 +389,7 @@ report. Notes for this board:
   `post_processed_metrics.csv` instead. In the CSV, column 3 is the time and column 2 the
   sample length in ms (idle samples are about 200 ms long, busy ones 1 ms).
 - Utilisation = effective DSP frequency ÷ clock.
-- Profiling slows NCM from 143 to about 177 ms per story.
+- Profiling slowed the first version from 143 to about 177 ms per story.
 
 ---
 
@@ -339,21 +407,36 @@ report. Notes for this board:
 4. **Overrides on data-movement ops are ignored.** Setting Transpose or Squeeze outputs to 8 bits
    does nothing; set the compute op that produces the tensor. `make_overrides.py` walks back to it.
 5. **numpy's thread pool can cost more than the NPU work.** With one spinning thread per core,
-   all 8 cores sat at 96% and the NPU run took 225 ms. With `OPENBLAS_NUM_THREADS=4` it takes 143 ms.
+   all 8 cores sat at 96% and the NPU run took 225 ms. With `OPENBLAS_NUM_THREADS=4` it took 143 ms.
 6. **Compare like with like.** A cold, untuned CPU run first suggested the NPU was 5× faster.
-   Warm and tuned on both sides, it is 1.9×.
-7. **Use the static ONNX exporter** (`dynamo=False`, no dynamic axes) for QAIRT.
-8. **Match versions.** Context binaries from QAIRT 2.50 need the 2.50 runtime on the board; the
+   Warm and tuned on both sides, the first version was 1.9×.
+7. **Pin benchmarks to the fast cores.** The QCS6490 has 4 slow and 4 fast CPU cores. The same
+   NPU run took 120 ms on cores 4–7, 235 ms on cores 0–3 and anywhere in between unpinned. With
+   `taskset -c 4-7` and a cool start (the board reaches 78–86 °C), runs repeat within 1%.
+8. **Profile before optimizing.** The NPU computed for only a third of each story. The rest was the
+   pipe, conversions and CPU math, so the gains came from the host code, not the model.
+9. **Batching only pays when something overlaps.** Once call overhead is small, the NPU's time
+   grows with the batch. Batching helped because it made each NPU call long enough to hide the
+   CPU work of a second batch behind it.
+10. **The DSP can hang.** Once during testing every NPU call failed and the kernel logged
+   `glink-edge: intent request timed out` every 10 s. The cDSP is in "attached" state, so Linux
+   cannot restart it; only a reboot helped. It did not recur in 60+ runs; the cause is unknown.
+11. **Use the static ONNX exporter** (`dynamo=False`, no dynamic axes) for QAIRT.
+12. **Match versions.** Context binaries from QAIRT 2.50 need the 2.50 runtime on the board; the
    board's stock 2.42 runtime rejects them.
-9. **Training stability.** The tokenizer diverged twice before switching to VAR-style residual
+13. **Training stability.** The tokenizer diverged twice before switching to VAR-style residual
    quantization (detached residuals, one straight-through gradient) and a normalized encoder output.
 
 ---
 
 ## Limitations
 
-- About half of each NPU story is Python between NPU calls. Moving that work into C, batching
-  several stories per call, and requesting a higher NPU clock should help; none is done yet.
+- The NPU calls (~57 ms per story, ~51 ms of it compute) are now the limit. The sampling and math between
+  levels (~45 ms per story) still run in numpy; with fewer lanes or a faster NPU it would show
+  again. Moving it into C, or the codebook head onto the NPU, has not been tried.
+- No NPU performance mode is requested (`--perf_profile burst` changed the profiled call time by
+  only ~5%). The new version has not been profiled with sysMon.
+- The 8-bit build was not rebuilt for batching or re-measured with pinning.
 - Agreement with fp32 is measured per level with identical inputs. NPU-generated stories have
   not been scored by GPT-2 separately.
 - Each preset was trained once; the base vs v2 difference rests on single runs.

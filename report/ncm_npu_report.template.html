@@ -92,22 +92,22 @@ footer { font-size: 12px; color: var(--ink-3); display: grid; gap: 4px; }
   <header>
     <div class="eyebrow">Radxa Dragon Q6A · Qualcomm QCS6490 · Hexagon v68</div>
     <h1>Next-Concept Modeling on the Hexagon NPU</h1>
-    <p class="lede">A 20M-parameter NCM model, trained from scratch on TinyStories, writes a 128-token story in 12 coarse-to-fine steps. This page compares running it on the board's CPU and on its NPU: speed, how busy the NPU is (Qualcomm sysMon), and how closely the quantized NPU model matches the full-precision one.</p>
-    <div class="meta"><span>Model: v2 preset, 8.0M tokenizer + 11.9M generator</span><span>Toolchain: QAIRT 2.50, Hexagon SDK 5.5.7 sysMon</span><span>Measured 2026-10-24</span></div>
+    <p class="lede">A 20M-parameter NCM model, trained from scratch on TinyStories, writes a 128-token story in 12 coarse-to-fine steps. This page compares running it on the board's CPU and on its NPU: speed, where the time goes (QNN profiling), how busy the NPU is (Qualcomm sysMon), and how closely the quantized NPU model matches the full-precision one.</p>
+    <div class="meta"><span>Model: v2 preset, 8.0M tokenizer + 11.9M generator</span><span>Toolchain: QAIRT 2.50, Hexagon SDK 5.5.7 sysMon</span><span>Measured 2026-10-24 (speed re-measured after the shared-buffer and batching update)</span></div>
   </header>
 
   <section aria-label="Summary">
     <div class="tiles">
-      <div class="tile"><div class="k">NPU time per story</div><div class="v">143<small>ms</small></div><div class="d">16-bit mixed build, 48 stories, warm</div></div>
-      <div class="tile"><div class="k">vs tuned CPU</div><div class="v">1.9×<small>faster</small></div><div class="d">CPU best at one story at a time: 276 ms</div></div>
-      <div class="tile"><div class="k">NPU utilisation</div><div class="v">23<small>%</small></div><div class="d">0% at idle and while NCM runs on the CPU</div></div>
-      <div class="tile"><div class="k">Matches fp32 model</div><div class="v">91–98<small>%</small></div><div class="d">same code chosen, levels 2–12; decoder 99.7%</div></div>
+      <div class="tile"><div class="k">NPU time per story</div><div class="v">66<small>ms</small></div><div class="d">shared buffers, 8 stories per call, 2 batches in flight</div></div>
+      <div class="tile"><div class="k">vs best CPU</div><div class="v">2.9×<small>faster</small></div><div class="d">CPU best: 191 ms (8 stories per batch)</div></div>
+      <div class="tile"><div class="k">vs first NPU version</div><div class="v">1.9×<small>faster</small></div><div class="d">126 ms with a pipe and one story per call</div></div>
+      <div class="tile"><div class="k">Matches fp32 model</div><div class="v">88–98<small>%</small></div><div class="d">same code chosen, levels 2–12; decoder 99.2–99.7%</div></div>
     </div>
   </section>
 
   <section>
     <h2>Time per story</h2>
-    <p>Every row generates the same kind of story with the same model on the same board, measured warm over 48 stories. The CPU rows show how much its result depends on thread settings: using all 8 cores is the slowest option, because work spreads onto the slow A55 cores.</p>
+    <p>Every row generates the same kind of story with the same model on the same board, warm, 96 stories, two runs each, starting below 60 °C. NPU runs are pinned to the four fast cores (<code>taskset -c 4-7</code>): unpinned, the same code varied from 120 to 235 ms depending on which cores Linux chose. The CPU rows use their best setting (4 onnxruntime threads, 1 numpy thread, all cores).</p>
     <div class="panel" id="speed">
       <p class="chart-title">Milliseconds per story, lower is better</p>
       <div class="legend"><span><i class="sw box" style="background:var(--npu)"></i>Hexagon NPU</span><span><i class="sw box" style="background:var(--cpu)"></i>CPU (onnxruntime INT8)</span></div>
@@ -115,16 +115,24 @@ footer { font-size: 12px; color: var(--ink-3); display: grid; gap: 4px; }
       <details><summary>Show the numbers</summary><div class="tbl"><table id="speedTbl"></table></div></details>
     </div>
     <div class="panel" id="split">
-      <p class="chart-title">Where the NPU run's 143 ms goes</p>
-      <div class="legend"><span><i class="sw box" style="background:var(--npu)"></i>Inside the 13 NPU calls (12 generator + 1 decoder)</span><span><i class="sw box" style="background:var(--cpu)"></i>Python on the CPU between calls</span></div>
-      <svg id="splitSvg" viewBox="0 0 900 70" role="img" aria-label="Stacked bar: 98 ms in NPU calls, 45 ms on the CPU"></svg>
-      <p class="chart-sub" style="margin:6px 0 0">The 98 ms includes copying data to and from the NPU. sysMon puts the NPU's own compute at roughly 50–85 ms of it.</p>
+      <p class="chart-title">Where the first NPU version's time went (146 ms per story)</p>
+      <div class="legend"><span><i class="sw box" style="background:var(--npu)"></i>NPU computing</span><span><i class="sw box" style="background:var(--s2)"></i>QNN call overhead</span><span><i class="sw box" style="background:var(--s3)"></i>Pipe to qnn_serve + 8/16-bit conversion</span><span><i class="sw box" style="background:var(--cpu)"></i>CPU math between levels</span></div>
+      <svg id="splitSvg" viewBox="0 0 900 70" role="img" aria-label="Stacked bar: 51 ms NPU compute, 12 ms QNN overhead, 37 ms pipe and conversion, 46 ms CPU math"></svg>
+      <p class="chart-sub" style="margin:6px 0 0">From qnn-net-run profiling (4.15 ms NPU compute per generator step, 0.85 ms per decode) and a per-stage timer in the Python runner. Fixed per-call costs (49 ms) were as large as the compute.</p>
+    </div>
+    <div class="note">
+      <b>What changed</b>
+      <ul>
+        <li><b>Shared buffers</b> (126 → 105 ms): Python loads the QNN runtime in-process and writes inputs straight into DSP-shared memory (rpcmem), so there is no pipe and no copying. The decoder's argmax now runs on the NPU and returns 1,024 token ids instead of a 1 MB logits table, so a decode call takes about 1 ms instead of 6–8 ms.</li>
+        <li><b>Batching</b> (105 → 100 ms): 4 or 8 stories per NPU call. On its own this saves little, because the NPU's work grows with the batch (about 4.75 ms per story per level).</li>
+        <li><b>Two batches in flight</b> (100 → 66 ms): while one batch does its sampling on the CPU, the NPU runs the other. The CPU work (about 45 ms per story) now hides behind the NPU work (about 57 ms), which sets the new limit. Both lanes give exactly the same tokens as running them one after the other.</li>
+      </ul>
     </div>
   </section>
 
   <section>
     <h2>Is the NPU doing the work?</h2>
-    <p>Three 10-second sysMon captures of the NPU (the "compute DSP"): nothing running, NCM running on the CPU, and NCM running on the NPU. The line is the NPU's effective work rate, its real busy cycles per second. The CPU run leaves the NPU as idle as doing nothing at all.</p>
+    <p>Three 10-second sysMon captures of the NPU (the "compute DSP"): nothing running, NCM running on the CPU, and NCM running on the NPU with the first version (pipe, one story per call). The line is the NPU's effective work rate, its real busy cycles per second. The CPU run leaves the NPU as idle as doing nothing at all.</p>
     <div class="panel" id="lanes">
       <p class="chart-title">NPU effective work rate (MHz), 50 ms averages</p>
       <p class="chart-sub">Same scale in all three panels. Hover for values.</p>
@@ -155,7 +163,7 @@ footer { font-size: 12px; color: var(--ink-3); display: grid; gap: 4px; }
       <svg id="accSvg" viewBox="0 0 900 330" role="img" aria-label="Line chart of agreement with fp32 per level for three builds"></svg>
       <details><summary>Show the numbers</summary><div class="tbl"><table id="accTbl"></table></div></details>
     </div>
-    <p>The 8-bit NPU build is fastest (107 ms) but loses up to 41 points at level 3. The v68 NPU cannot multiply two 16-bit activation tensors, so the recommended build runs everything at 16 bits except the attention multiplies, which stay at 8.</p>
+    <p>The batched rebuilds (1, 4 and 8 stories per call, decoder argmax on the NPU) match fp32 just as closely: 88–98% per level and 99.2–99.7% for the decoder, within the run-to-run noise of 16 stories. The 8-bit NPU build was faster in the first version (107 vs 143 ms, unpinned) but loses up to 41 points at level 3. The v68 NPU cannot multiply two 16-bit activation tensors, so the recommended build runs everything at 16 bits except the attention multiplies, which stay at 8.</p>
   </section>
 
   <section>
@@ -177,8 +185,10 @@ footer { font-size: 12px; color: var(--ink-3); display: grid; gap: 4px; }
     <h2>How these numbers were measured</h2>
     <div class="note">
       <ul>
-        <li>Speed: warm process, 48 stories, one story per call unless "4 per batch". NPU runs use 4 numpy threads; the CPU's best setting is 4 onnxruntime threads and 1 numpy thread.</li>
-        <li>sysMon was off for speed runs. With sysMon recording, NPU runs slow to about 177 ms per story.</li>
+        <li>Speed: warm process, 96 stories, two runs per setup, each starting below 60 °C (the board reaches 78–86 °C under load). NPU runs pinned to cores 4–7 with 4 numpy threads; the CPU's best setting is 4 onnxruntime threads and 1 numpy thread on all cores (pinning made the CPU slower: 305 ms at one story per batch). Pinned runs repeat within about 1%.</li>
+        <li>An earlier, unpinned round put the CPU at 808 ms (8 onnxruntime threads) and 586 ms (default settings): thread settings matter as much as the hardware.</li>
+        <li>The DSP hung once during testing (kernel log: glink "intent request timed out"; every NPU call failed until a reboot). It did not recur in 60+ runs afterwards; the cause is unknown.</li>
+        <li>sysMon was off for speed runs. With sysMon recording, the first NPU version slowed to about 177 ms per story.</li>
         <li>sysMon reports two active-time figures for the NPU run (2.8 s and 3.6 s of 10 s). Utilisation (23%) is the effective work rate divided by the clock, which these samples reproduce (229 / 958 MHz).</li>
         <li>Agreement for the CPU INT8 build was checked on the laptop with 8 stories; the NPU builds on the board with 16. NPU-generated stories have not been scored by GPT-2 separately.</li>
         <li>Each model was trained once; differences between presets come from single runs.</li>
@@ -229,19 +239,20 @@ function table(id, head, rows) {
 
 /* ---------- speed bars ---------- */
 const SPEED = [
-  { label: "CPU · 8 onnxruntime threads", ms: 808, npu: false },
-  { label: "CPU · default thread settings", ms: 586, npu: false },
-  { label: "CPU · tuned threads", ms: 276, npu: false },
-  { label: "CPU · tuned, 4 stories per batch", ms: 196, npu: false },
-  { label: "NPU · 16-bit mixed (recommended)", ms: 143, npu: true, rec: true },
-  { label: "NPU · 8-bit", ms: 107, npu: true },
+  { label: "CPU · 1 story at a time", ms: 276, npu: false },
+  { label: "CPU · 8 stories per batch", ms: 191, npu: false },
+  { label: "NPU · first version (pipe)", ms: 125.6, npu: true },
+  { label: "NPU · shared buffers", ms: 105.3, npu: true },
+  { label: "NPU · + 4 stories per call", ms: 99.5, npu: true },
+  { label: "NPU · + 2 batches of 4 in flight", ms: 75.2, npu: true },
+  { label: "NPU · + 2 batches of 8 in flight", ms: 66.1, npu: true, rec: true },
 ];
 function drawSpeed() {
   const svg = document.getElementById("speedSvg"); svg.innerHTML = "";
   const panel = document.getElementById("speed");
-  const L = 250, R = 860, top = 14, row = 44, bh = 22, max = 900;
+  const L = 250, R = 860, top = 14, row = 40, bh = 22, max = 300;
   const x = v => L + (R - L) * v / max;
-  for (let v = 0; v <= max; v += 300) {
+  for (let v = 0; v <= max; v += 100) {
     el("line", { x1: x(v), x2: x(v), y1: top - 4, y2: top + row * SPEED.length - 10, stroke: css("--grid"), "stroke-width": 1 }, svg);
     el("text", { x: x(v), y: top + row * SPEED.length + 6, "text-anchor": "middle", class: "axis num" }, svg, v);
   }
@@ -251,7 +262,7 @@ function drawSpeed() {
     const p = el("path", { d: roundRight(L, y, x(d.ms) - L, bh, 4), fill: d.npu ? css("--npu") : css("--cpu"), class: "bar" }, svg);
     el("text", { x: x(d.ms) + 8, y: y + bh / 2 + 4, class: "num " + (d.rec ? "strong" : "") }, svg, d.ms + " ms");
     const hit = el("rect", { x: 0, y: y - 8, width: 900, height: row - 4, fill: "transparent" }, svg);
-    hit.addEventListener("mousemove", () => { p.style.opacity = .8; showTip(panel, svg, x(d.ms), y, `${d.label}<br><b>${d.ms} ms</b> per story · ${(276 / d.ms).toFixed(2)}× the tuned CPU speed`); });
+    hit.addEventListener("mousemove", () => { p.style.opacity = .8; showTip(panel, svg, x(d.ms), y, `${d.label}<br><b>${d.ms} ms</b> per story · ${(191 / d.ms).toFixed(2)}× the best CPU speed`); });
     hit.addEventListener("mouseleave", () => { p.style.opacity = 1; hideTip(panel); });
   });
   el("line", { x1: L, x2: L, y1: top - 6, y2: top + row * SPEED.length - 10, stroke: css("--ink-3"), "stroke-width": 1 }, svg);
@@ -261,14 +272,18 @@ function drawSpeed() {
 /* ---------- split ---------- */
 function drawSplit() {
   const svg = document.getElementById("splitSvg"); svg.innerHTML = "";
-  const L = 20, R = 860, total = 143, y = 12, h = 24, x = v => (R - L) * v / total;
-  const a = x(98);
-  el("rect", { x: L, y, width: a - 1, height: h, rx: 0, fill: css("--npu") }, svg);
-  el("path", { d: roundRight(L + a + 1, y, x(45) - 1, h, 4), fill: css("--cpu") }, svg);
-  el("text", { x: L + 10, y: y + h / 2 + 4, fill: "#fff", style: "fill:#fff" , class: "num"}, svg, "98 ms in NPU calls");
-  el("text", { x: L + a + 10, y: y + h / 2 + 4, style: `fill:${css("--surface")}`, class: "num" }, svg, "45 ms CPU");
+  const parts = [[51, "--npu", "51 ms NPU"], [12, "--s2", "12"], [37, "--s3", "37 ms pipe + convert"], [46, "--cpu", "46 ms CPU math"]];
+  const L = 20, R = 860, total = 146, y = 12, h = 24, x = v => (R - L) * v / total;
+  let at = L;
+  parts.forEach(([ms, c, label], i) => {
+    const w = x(ms) - (i < parts.length - 1 ? 2 : 0);  // 2px gap between segments
+    if (i < parts.length - 1) el("rect", { x: at, y, width: w, height: h, fill: css(c) }, svg);
+    else el("path", { d: roundRight(at, y, w, h, 4), fill: css(c) }, svg);
+    el("text", { x: at + 8, y: y + h / 2 + 4, style: "fill:#fff", class: "num" }, svg, label);
+    at += x(ms);
+  });
   el("text", { x: L, y: y + h + 22, class: "axis num" }, svg, "0");
-  el("text", { x: R, y: y + h + 22, "text-anchor": "end", class: "axis num" }, svg, "143 ms");
+  el("text", { x: R, y: y + h + 22, "text-anchor": "end", class: "axis num" }, svg, "146 ms");
 }
 
 /* ---------- three lanes ---------- */

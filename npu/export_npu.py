@@ -5,12 +5,19 @@ NPU graphs need fixed shapes, so:
              mask [129,129] (additive; hides padding)  ->  h [128,W] (final-norm hidden states)
   dec.onnx   zhat [128,d]  ->  logits [128,vocab]
 All inputs/outputs are rank 2 so the converter never reorders axes.
+
+With --batch B, both graphs take B stories stacked on the first axis (one NPU call per level for
+all B), and the decoder also does the argmax on the NPU, returning token ids instead of the large
+logits table:
+  gen_bB.onnx   zin [B*128,d], lvl [1,W], mask [129,129]  ->  h [B*128,W]
+  dec_bB.onnx   zhat [B*128,d]  ->  tokens [B*128]
 The codebook-distance head (h -> code logits) stays on the CPU in fp32: it is a difference of
 large numbers that does not survive 8/16-bit rounding (see README, INT8 note).
 
 Also writes calibration inputs recorded from real generation, and cpu_head.npz.
 
     .venv/bin/python npu/export_npu.py --ckpt ckpt_v2 --out npu/build
+    .venv/bin/python npu/export_npu.py --ckpt ckpt_v2 --out npu/build --batch 4
 """
 import argparse
 import math
@@ -47,33 +54,39 @@ def block_fwd(b, x, mask=None, rope=None):
 
 
 class GenNPU(nn.Module):
-    def __init__(self, g, L):
+    def __init__(self, g, L, batch=None):
         super().__init__()
-        self.g = g
+        self.g, self.batch, self.L = g, batch, L
         cos, sin = g._rope(torch.cat([torch.zeros(1), torch.arange(L).float()]))  # prefix at 0, then local 0..L-1
         self.register_buffer("cos", cos)
         self.register_buffer("sin", sin)
 
     def forward(self, zin, lvl, mask):
         g = self.g
-        x = g.in_proj(zin[None]) + lvl[None]
-        x = torch.cat([g.prefix, x], 1)
+        B = self.batch or 1
+        x = g.in_proj(zin.reshape(B, self.L, -1)) + lvl[None]
+        x = torch.cat([g.prefix.expand(B, -1, -1), x], 1)
         for b in g.blocks:
             x = block_fwd(b, x, mask[None, None], (self.cos, self.sin))
-        return g.norm(x)[0, 1:]
+        h = g.norm(x)[:, 1:]
+        return h.reshape(B * self.L, -1) if self.batch else h[0]
 
 
 class DecNPU(nn.Module):
-    def __init__(self, tok):
+    def __init__(self, tok, batch=None):
         super().__init__()
-        self.t = tok
+        self.t, self.batch = tok, batch
 
     def forward(self, zhat):
         t = self.t
-        h = zhat[None] + t.dec_pos
+        B = self.batch or 1
+        h = zhat.reshape(B, t.cfg.L, -1) + t.dec_pos
         for b in t.dec:
             h = block_fwd(b, h)
-        return t.head(t.dec_norm(h))[0]
+        logits = t.head(t.dec_norm(h))
+        if self.batch:  # token ids only: [B*L] instead of [B*L, vocab]
+            return logits.argmax(-1).reshape(-1).to(torch.int32)
+        return logits[0]
 
 
 def npu_mask(n, L):
@@ -95,6 +108,7 @@ def main():
     ap.add_argument("--ckpt", default="ckpt_v2")
     ap.add_argument("--out", default="npu/build")
     ap.add_argument("--calib_stories", type=int, default=8, help="stories per level used for calibration")
+    ap.add_argument("--batch", type=int, default=None, help="export batched graphs gen_bB/dec_bB (decoder returns tokens)")
     args = ap.parse_args()
     os.makedirs(args.out, exist_ok=True)
     torch.set_grad_enabled(False)
@@ -144,28 +158,53 @@ def main():
     assert worst < 1e-2 and dworst < 1e-2
     assert max_score < -NEG / 2, "raise |NEG|"
 
+    # ---- batched variant: same calibration data, B stories of one level per sample
+    sfx, Bt = "", args.batch
+    if Bt:
+        assert args.calib_stories % Bt == 0 and B % Bt == 0, "calib_stories and 32 must be multiples of --batch"
+        sfx = f"_b{Bt}"
+        gnpu, dnpu = GenNPU(gen, L, Bt).eval(), DecNPU(tok, Bt).eval()
+        grouped = []
+        for s0 in range(0, len(calib_gen), Bt):  # calib_gen is level-major, calib_stories per level
+            grp = calib_gen[s0:s0 + Bt]
+            grouped.append((np.concatenate([a for a, _, _ in grp]), grp[0][1], grp[0][2]))
+        # batched graph must equal the single-story graph, story by story
+        a, lv, mk = (torch.from_numpy(x) for x in grouped[-1])
+        one = torch.cat([GenNPU(gen, L)(a[i * L:(i + 1) * L], lv, mk) for i in range(Bt)])
+        bdiff = float((gnpu(a, lv, mk) - one).abs().max())
+        ztok = zhat[:Bt].reshape(Bt * L, d)
+        tdiff = float((dnpu(ztok) != tok.decode(zhat[:Bt]).argmax(-1).reshape(-1)).float().mean())
+        print(f"batch {Bt}: gen max diff vs single {bdiff:.2e}, decoder token mismatch {tdiff:.4f}")
+        assert bdiff < 1e-3 and tdiff < 1e-3
+        calib_gen = grouped
+        dec_in = [zhat[j:j + Bt].reshape(Bt * L, d) for j in range(0, B, Bt)]
+    else:
+        dec_in = [zhat[j] for j in range(B)]
+
     # ---- ONNX (legacy exporter, fully static)
     ex = dict(export_params=True, opset_version=17, dynamo=False, do_constant_folding=True)
     zi, lv, mk = (torch.from_numpy(a) for a in calib_gen[0])
-    torch.onnx.export(gnpu, (zi, lv, mk), f"{args.out}/gen.onnx", input_names=["zin", "lvl", "mask"],
+    torch.onnx.export(gnpu, (zi, lv, mk), f"{args.out}/gen{sfx}.onnx", input_names=["zin", "lvl", "mask"],
                       output_names=["h"], **ex)
-    torch.onnx.export(dnpu, (zhat[0],), f"{args.out}/dec.onnx", input_names=["zhat"], output_names=["logits"], **ex)
+    torch.onnx.export(dnpu, (dec_in[0],), f"{args.out}/dec{sfx}.onnx", input_names=["zhat"],
+                      output_names=["tokens" if Bt else "logits"], **ex)
 
     # ---- calibration raws (float32, C order) + input lists for qairt-quantizer
-    cdir = os.path.abspath(f"{args.out}/calib")
+    cdir = os.path.abspath(f"{args.out}/calib{sfx}")
     os.makedirs(cdir, exist_ok=True)
-    with open(f"{args.out}/calib_gen.txt", "w") as f:
+    with open(f"{args.out}/calib_gen{sfx}.txt", "w") as f:
         for j, (a, b_, c) in enumerate(calib_gen):
             for nm, arr in (("zin", a), ("lvl", b_), ("mask", c)):
                 arr.astype(np.float32).tofile(f"{cdir}/g{j}_{nm}.raw")
             f.write(f"zin:={cdir}/g{j}_zin.raw lvl:={cdir}/g{j}_lvl.raw mask:={cdir}/g{j}_mask.raw\n")
-    with open(f"{args.out}/calib_dec.txt", "w") as f:
-        for j in range(B):
-            zhat[j].numpy().astype(np.float32).tofile(f"{cdir}/d{j}_zhat.raw")
+    with open(f"{args.out}/calib_dec{sfx}.txt", "w") as f:
+        for j, z in enumerate(dec_in):
+            z.numpy().astype(np.float32).tofile(f"{cdir}/d{j}_zhat.raw")
             f.write(f"zhat:={cdir}/d{j}_zhat.raw\n")
 
     np.savez(f"{args.out}/cpu_head.npz", **w)
-    print(f"wrote {args.out}: gen.onnx, dec.onnx, {len(calib_gen)} gen + {B} dec calibration inputs, cpu_head.npz")
+    print(f"wrote {args.out}: gen{sfx}.onnx, dec{sfx}.onnx, {len(calib_gen)} gen + {len(dec_in)} dec "
+          "calibration inputs, cpu_head.npz")
 
 
 if __name__ == "__main__":

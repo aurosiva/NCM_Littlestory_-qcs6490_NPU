@@ -1,13 +1,19 @@
 #!/usr/bin/env bash
 # ONNX -> DLC -> quantized DLC -> HTP context binary for QCS6490 (v68, soc 35, 2 MB VTCM).
-# Usage: bash npu/build.sh [act_bits=16] [weight_bits=8]
+# Usage: bash npu/build.sh [act_bits=16] [weight_bits=8] [batch]
+#   batch (optional): build gen_bB/dec_bB from export_npu.py --batch B (decoder returns tokens)
 set -eo pipefail
 cd "$(dirname "$0")/build"
 source ../qenv.sh; set -u
-A=${1:-16}; Wb=${2:-8}
+A=${1:-16}; Wb=${2:-8}; BS=${3:-}
 TAG=a${A}w${Wb}; [ "$A" = 16 ] && TAG=${TAG}mix   # 16-bit, attention matmuls 8-bit
-for m in gen dec; do
-  OV=""; [ "$A" = 16 ] && OV="--quantization_overrides ${m}_overrides.json"
+SFX=""; [ -n "$BS" ] && SFX=_b$BS
+for m in gen$SFX dec$SFX; do
+  OV=""
+  if [ "$A" = 16 ]; then
+    [ -f ${m}_overrides.json ] || python ../make_overrides.py $m.onnx > ${m}_overrides.json
+    OV="--quantization_overrides ${m}_overrides.json"
+  fi
   qairt-converter --input_network $m.onnx --output_path ${m}_fp32.dlc $OV > ${m}_convert.log 2>&1
   qairt-quantizer --input_dlc ${m}_fp32.dlc --input_list calib_$m.txt --output_dlc ${m}_${TAG}.dlc \
       --act_bitwidth $A --weights_bitwidth $Wb --bias_bitwidth 32 --use_per_channel_quantization \
