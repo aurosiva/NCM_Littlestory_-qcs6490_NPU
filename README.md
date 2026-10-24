@@ -16,9 +16,14 @@ step is predicted in parallel, which suits an NPU well.
 | NPU toolchain | Qualcomm QAIRT 2.50 (converter, quantizer, HTP context binaries) |
 | Result | **66 ms per story on the NPU, 2.9× faster than the best CPU setting** (191 ms) |
 
-**[View the interactive report online](https://aurosiva.github.io/NCM_Littlestory_-qcs6490_NPU/)**: the full
-comparison with charts (speed, where the time goes, sysMon NPU profiles, accuracy per level). The same page is in
-[`report/ncm_npu_report.html`](report/ncm_npu_report.html).
+**Live pages** (GitHub Pages):
+
+- **[Interactive report](https://aurosiva.github.io/NCM_Littlestory_-qcs6490_NPU/)**: speed, where the
+  time goes, sysMon NPU profiles and accuracy per level. Source: [`report/ncm_npu_report.html`](report/ncm_npu_report.html).
+- **[sysMon comparison](https://aurosiva.github.io/NCM_Littlestory_-qcs6490_NPU/report/ncm_sysmon_comparison.html)**:
+  five 10-second NPU captures side by side (idle, NCM on the CPU, and three NPU versions), with the
+  parser's summaries, zoomable core and bus graphs, clock residency and NPU call statistics.
+  Source: [`report/ncm_sysmon_comparison.html`](report/ncm_sysmon_comparison.html).
 
 ---
 
@@ -226,8 +231,12 @@ npu/
   demo_ncm.py        live coarse-to-fine demo in the terminal; can record to JSON lines
   render_demo.py     turns a demo recording into a GIF and MP4
 report/
-  ncm_npu_report.html            the comparison page (self-contained)
-  ncm_npu_report.template.html   the same page before the data is filled in
+  ncm_npu_report.html                  the main comparison page (self-contained)
+  ncm_npu_report.template.html         the same page before the data is filled in
+  ncm_sysmon_comparison.html           sysMon comparison of five captures (self-contained)
+  ncm_sysmon_comparison.template.html  its page before the data is filled in
+  make_sysmon_page.py                  builds the sysMon page from parsed captures
+index.html                             GitHub Pages entry point (opens the main report)
 ```
 
 Not committed (see `.gitignore`): datasets, checkpoints, ONNX and NPU binaries, logs, and any
@@ -423,6 +432,15 @@ report. Notes for this board:
   sample length in ms (idle samples are about 200 ms long, busy ones 1 ms).
 - Utilisation = effective DSP frequency ÷ clock.
 - Profiling slowed the first version from 143 to about 177 ms per story.
+- Do not record the multi-lane setup (`--lanes 2`): sysMon stalled its NPU calls and the DSP hung
+  afterwards (see Lessons).
+
+To build the comparison page from several parsed captures, put each parser output folder in one
+directory (`idle/`, `cpu/`, `v1/`, `v2b1/`, `v2b8x2/`, as named in `make_sysmon_page.py`) and run:
+
+```bash
+python3 report/make_sysmon_page.py logs/sysmon/run3 report/ncm_sysmon_comparison.html
+```
 
 ---
 

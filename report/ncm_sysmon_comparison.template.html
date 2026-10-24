@@ -104,7 +104,7 @@ footer { font-size: 12px; color: var(--ink-3); display: grid; gap: 4px; }
 
   <section>
     <h2>Overall summary</h2>
-    <p>Rows marked "parser" are copied from the parser's <code>dcvs_metric.txt</code>. "Time-averaged" rows are computed here from its 1 ms samples; they need samples covering the whole capture, so they are blank for the idle and CPU captures (the parser only samples the idle NPU about 1–2% of the time). Utilisation is the effective work rate divided by the clock. "Busy share" is a separate measurement: NPU compute per story from QNN profiling, divided by the normal time per story.</p>
+    <p>Rows marked "parser" are copied from the parser's <code>dcvs_metric.txt</code>. "Time-averaged" rows are computed here from the parser's samples, each weighted by the time it covers (about 1 ms while the NPU is busy, about 200 ms while it is idle). Utilisation is the effective work rate divided by the clock. "Busy share" is a separate measurement: NPU compute per story from QNN profiling, divided by the normal time per story.</p>
     <div class="panel tbl"><table id="overallTbl"></table></div>
   </section>
 
@@ -319,7 +319,7 @@ function drawMultiples(svgId, panelId, lines, steps, unitNote) {
     const y0 = TOP + ci * (PANEL_H + GAP), y = v => y0 + PANEL_H - 18 - (PANEL_H - 30) * v / ymax, base = y(0);
     el("text", { x: PL, y: y0 + 8, class: "lab" }, svg, c.label);
     el("text", { x: PR, y: y0 + 8, "text-anchor": "end", class: "axis num" }, svg,
-      c.dcvs.util !== null ? `utilisation ${fmt(c.dcvs.util)}% · avg clock ${fmt(c.dcvs.clk_mhz)} MHz` : "");
+      `utilisation ${fmt(c.dcvs.util)}% · clock, time-averaged ${fmt(c.series.clk_avg)} MHz`);
     [0, ymax / 2, ymax].forEach(v => {
       el("line", { x1: PL, x2: PR, y1: y(v), y2: y(v), stroke: css("--grid"), "stroke-width": 1 }, svg);
       el("text", { x: PL - 8, y: y(v) + 4, "text-anchor": "end", class: "axis num" }, svg, fmt(v));

@@ -78,11 +78,14 @@ def read_series(path):
     """1 ms samples while busy, ~200 ms while idle. Columns follow the parser's header."""
     rows = [r for r in csv.reader(open(path))][1:]
     rows = [r for r in rows if len(r) > 18 and r[2].strip()]
-    t0 = ts(rows[0][2])
+    t0 = ts(rows[0][2]) - (num(rows[0][1]) or 0)
     S = {k: [] for k in ("t", "per", "load", "hvx", "mpps", "rd", "wr")}
     clk, bus, share, tot = [], [], {}, 0.0
     for r in rows:
-        t, per = ts(r[2]) - t0, num(r[0]) or 0
+        # column 2 (SysClock Time) is the real time the sample covers, ending at its timestamp:
+        # ~1 ms while the NPU is busy, ~200 ms while idle. Column 1 is the nominal period (1 ms).
+        per = num(r[1]) or 0
+        t = ts(r[2]) - t0 - per
         S["t"].append(t)
         S["per"].append(round(per))
         S["load"].append(round(num(r[6]) or 0))
@@ -98,15 +101,16 @@ def read_series(path):
         share[c] = share.get(c, 0) + per
         tot += per
     S["clk"], S["bus"] = clk, bus
-    span = ts(rows[-1][2]) - t0 + (num(rows[-1][0]) or 0)
-    S["coverage"] = round(tot / span, 3) if span else 0  # idle captures only sample ~1-2% of the time
-    if S["coverage"] > 0.9:  # time-weighted averages are only meaningful when the samples cover the capture
+    span = ts(rows[-1][2]) - t0
+    S["coverage"] = round(tot / span, 3) if span else 0
+    if S["coverage"] > 0.9:  # time-weighted averages need samples that cover the capture
         S["eff_avg"] = round(sum(e * p for e, p in zip(S["load"], S["per"])) / tot, 1)
-        S["clk_avg"] = round(sum(num(r[7]) * (num(r[0]) or 0) for r in rows) / tot, 1)
+        S["clk_avg"] = round(sum(num(r[7]) * (num(r[1]) or 0) for r in rows) / tot, 1)
         S["rd_avg"] = round(sum(v * p for v, p in zip(S["rd"], S["per"])) / tot, 1)
         S["wr_avg"] = round(sum(v * p for v, p in zip(S["wr"], S["per"])) / tot, 1)
     S["share"] = {str(k): round(100 * v / tot, 1) for k, v in sorted(share.items())}
     S["end"] = S["t"][-1] + S["per"][-1]
+    print(f"  samples cover {tot / 1000:.2f} s of {span / 1000:.2f} s")
     return S
 
 
