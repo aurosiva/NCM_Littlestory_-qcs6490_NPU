@@ -16,8 +16,9 @@ step is predicted in parallel, which suits an NPU well.
 | NPU toolchain | Qualcomm QAIRT 2.50 (converter, quantizer, HTP context binaries) |
 | Result | **143 ms per story on the NPU, 1.9× faster than a tuned CPU** |
 
-Open [`report/ncm_npu_report.html`](report/ncm_npu_report.html) in a browser for the full
-comparison with charts (speed, sysMon NPU profiles, accuracy per level).
+**[View the interactive report online](https://aurosiva.github.io/NCM_Littlestory_-qcs6490_NPU/)**: the full
+comparison with charts (speed, sysMon NPU profiles, accuracy per level). The same page is in
+[`report/ncm_npu_report.html`](report/ncm_npu_report.html).
 
 ---
 
