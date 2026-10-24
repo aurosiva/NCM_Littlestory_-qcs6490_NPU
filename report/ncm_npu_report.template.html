@@ -156,7 +156,7 @@ footer { font-size: 12px; color: var(--ink-3); display: grid; gap: 4px; }
 
   <section>
     <h2>First version vs new version, inside the NPU</h2>
-    <p>A second round compared the versions under identical conditions (pinned to the fast cores, starting below 60 °C). QNN's own profiler gives the NPU's compute time per call; dividing it by the measured time per story gives the share of each story the NPU spends computing. sysMon agrees for the first version (45% vs 46%).</p>
+    <p>A second round compared the versions under identical conditions (pinned to the fast cores, starting below 60 °C). QNN's own profiler gives the NPU's compute time per call; dividing it by the measured time per story gives the share of each story the NPU spends computing. sysMon agrees for the first version (45% vs 46%). Compute per story moves about ±15% between profiling sessions (4.15 vs 4.76 ms per generator call), so the shares are approximate; their order is not.</p>
     <div class="panel" id="busy">
       <p class="chart-title">Share of each story the NPU spends computing, higher is better</p>
       <p class="chart-sub">NPU compute per story (QNN profiling) ÷ time per story. Hover for values.</p>
@@ -181,16 +181,16 @@ footer { font-size: 12px; color: var(--ink-3); display: grid; gap: 4px; }
         <p class="chart-title">sysMon, 10 s per capture</p>
         <p class="chart-sub">Same session; NCM on the CPU stays at 0%.</p>
         <table>
-          <thead><tr><th>Capture</th><th class="n">Util.</th><th class="n">Avg clock</th><th class="n">DDR per story</th></tr></thead>
+          <thead><tr><th>Capture</th><th class="n">Util.</th><th class="n">Clock, time-avg.</th><th class="n">DDR per story</th></tr></thead>
           <tbody>
-            <tr><td>Nothing running</td><td class="n">0%</td><td class="n">364 MHz</td><td class="n">–</td></tr>
-            <tr><td>NCM on the CPU</td><td class="n">0%</td><td class="n">364 MHz</td><td class="n">–</td></tr>
-            <tr><td>First version</td><td class="n">45%</td><td class="n">949 MHz</td><td class="n">9 MB</td></tr>
-            <tr><td>Shared buffers</td><td class="n">48%</td><td class="n">950 MHz</td><td class="n">10 MB</td></tr>
-            <tr><td>Batch 8, 2 in flight*</td><td class="n">30%</td><td class="n">1246 MHz</td><td class="n">152 MB</td></tr>
+            <tr><td>Nothing running</td><td class="n">0%</td><td class="n">365 MHz</td><td class="n">–</td></tr>
+            <tr><td>NCM on the CPU</td><td class="n">0%</td><td class="n">365 MHz</td><td class="n">–</td></tr>
+            <tr><td>First version</td><td class="n">45%</td><td class="n">951 MHz</td><td class="n">9 MB</td></tr>
+            <tr><td>Shared buffers</td><td class="n">48%</td><td class="n">951 MHz</td><td class="n">10 MB</td></tr>
+            <tr><td>Batch 8, 2 in flight*</td><td class="n">30%</td><td class="n">1148 MHz</td><td class="n">152 MB</td></tr>
           </tbody>
         </table>
-        <p class="chart-sub" style="margin:8px 0 0">* sysMon slowed this setup from 66 to about 200 ms per story, so its utilisation is not representative. Its clock and DDR traffic are: a batch of 8 no longer fits in the 2 MB VTCM, spills to DDR (15× the traffic per story), and the NPU raises its clock up to 1440 MHz to compensate.</p>
+        <p class="chart-sub" style="margin:8px 0 0">* sysMon stalled this setup: after about 3.9 s its NPU calls came only every 0.5–1.4 s, so its utilisation reflects sysMon, not the setup. Per-call cycles and DDR traffic are not affected: 15–17× the DDR traffic per story, most likely because a batch of 8 no longer fits in the 2 MB VTCM; its clock reached 1440 MHz (parser's average 1246 MHz, time-weighted 1148). Full comparison: <a href="ncm_sysmon_comparison.html">sysMon comparison page</a>.</p>
       </div>
     </div>
   </section>

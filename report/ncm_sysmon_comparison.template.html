@@ -1,0 +1,490 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NCM NPU sysMon</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@600&display=swap">
+<style>
+/* Same visual system as ncm_npu_report.html: one column, summary first, then one section per
+   question; every chart has its numbers in a table nearby. */
+:root {
+  --bg: #f6f7f8; --surface: #fcfcfb; --ink: #111417; --ink-2: #4c5258; --ink-3: #737a81;
+  --rule: #dfe2e5; --grid: #e9ebed;
+  --c1: #2a78d6; --c2: #eb6834; --c3: #1baf7a;          /* categorical slots 1-3 */
+  --ref: #8a9097;                                       /* reference lines (clock, bus vote) */
+  --idle: #b4b9be;
+  --o1: #9cc3f2; --o2: #5c9be6; --o3: #2f74cc; --o4: #1f5aa6; --o5: #123e78;  /* ordinal: clock levels */
+  --wash: rgba(42,120,214,.12);
+  --f-display: "IBM Plex Sans Condensed", "Arial Narrow", "Helvetica Neue", Arial, sans-serif;
+  --f-body: "IBM Plex Sans", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --f-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #121416; --surface: #1a1c1e; --ink: #eef0f2; --ink-2: #b9bfc5; --ink-3: #8d949b;
+    --rule: #2c3034; --grid: #25292c; --c1: #3987e5; --c2: #d95926; --c3: #199e70; --ref: #8d949b; --idle: #4a5056;
+    --o1: #173f73; --o2: #1f5aa6; --o3: #2f74cc; --o4: #5c9be6; --o5: #9cc3f2; --wash: rgba(57,135,229,.16); color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #121416; --surface: #1a1c1e; --ink: #eef0f2; --ink-2: #b9bfc5; --ink-3: #8d949b;
+  --rule: #2c3034; --grid: #25292c; --c1: #3987e5; --c2: #d95926; --c3: #199e70; --ref: #8d949b; --idle: #4a5056;
+  --o1: #173f73; --o2: #1f5aa6; --o3: #2f74cc; --o4: #5c9be6; --o5: #9cc3f2; --wash: rgba(57,135,229,.16); color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.55 var(--f-body); }
+.wrap { max-width: 1000px; margin: 0 auto; padding: 40px 16px 64px; display: grid; gap: 44px; }
+header { display: grid; gap: 10px; }
+.eyebrow { font: 500 12px/1 var(--f-mono); letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3); }
+h1 { font: 600 clamp(28px, 5vw, 42px)/1.05 var(--f-display); margin: 0; text-wrap: balance; }
+h2 { font: 600 22px/1.2 var(--f-display); margin: 0; }
+.lede { color: var(--ink-2); max-width: 68ch; margin: 0; }
+.meta { font: 12px/1.6 var(--f-mono); color: var(--ink-3); display: flex; flex-wrap: wrap; gap: 4px 18px; }
+section { display: grid; gap: 14px; min-width: 0; }
+section > p { margin: 0; color: var(--ink-2); max-width: 72ch; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; }
+.tile { background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; padding: 16px 18px; display: grid; gap: 6px; align-content: start; }
+.tile .k { font: 500 11px/1.2 var(--f-mono); letter-spacing: .06em; text-transform: uppercase; color: var(--ink-3); }
+.tile .v { font: 600 30px/1 var(--f-display); font-variant-numeric: tabular-nums; }
+.tile .v small { font: 500 14px var(--f-body); color: var(--ink-2); margin-left: 3px; }
+.tile .d { font-size: 13px; color: var(--ink-2); }
+.panel { background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; padding: 18px 18px 12px; min-width: 0; position: relative; }
+.chart-title { font: 600 14px/1.3 var(--f-body); margin: 0 0 2px; }
+.chart-sub { font-size: 13px; color: var(--ink-3); margin: 0 0 10px; }
+svg { display: block; width: 100%; height: auto; overflow: visible; }
+svg text { font-family: var(--f-body); fill: var(--ink-2); font-size: 12px; }
+svg .num { font-family: var(--f-mono); font-variant-numeric: tabular-nums; }
+svg .axis { fill: var(--ink-3); font-size: 11px; }
+svg .strong { fill: var(--ink); font-weight: 600; }
+svg .lab { fill: var(--ink); font-weight: 600; font-size: 12px; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 13px; color: var(--ink-2); margin: 2px 0 8px; }
+.legend span { display: inline-flex; align-items: center; gap: 7px; }
+.sw { width: 16px; height: 0; border-top: 2px solid; display: inline-block; }
+.sw.dash { border-top-style: dashed; }
+.sw.box { height: 10px; width: 10px; border: 0; border-radius: 2px; }
+.controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin: 0 0 10px; font-size: 13px; color: var(--ink-2); }
+.seg { display: inline-flex; border: 1px solid var(--rule); border-radius: 6px; overflow: hidden; }
+.seg button { font: 500 12px var(--f-mono); background: var(--surface); color: var(--ink-2); border: 0; padding: 6px 10px; cursor: pointer; min-height: 32px; }
+.seg button + button { border-left: 1px solid var(--rule); }
+.seg button[aria-pressed="true"] { background: var(--wash); color: var(--ink); }
+input[type=range] { flex: 1 1 220px; accent-color: var(--c1); }
+.grid3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
+details { margin-top: 8px; border-top: 1px solid var(--rule); padding-top: 8px; }
+summary { cursor: pointer; font-size: 13px; color: var(--ink-2); }
+button:focus-visible, summary:focus-visible, input:focus-visible { outline: 2px solid var(--c1); outline-offset: 2px; }
+.tbl { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+th, td { text-align: left; padding: 6px 12px 6px 0; border-bottom: 1px solid var(--grid); white-space: nowrap; }
+thead th { font-weight: 500; color: var(--ink-3); font-size: 12px; vertical-align: bottom; }
+td.n, th.n { text-align: right; font-family: var(--f-mono); font-variant-numeric: tabular-nums; }
+tr.grp td { font-weight: 600; color: var(--ink); padding-top: 14px; border-bottom-color: var(--rule); }
+.tip { position: absolute; pointer-events: none; background: var(--ink); color: var(--surface); font: 12px/1.45 var(--f-body);
+  padding: 7px 9px; border-radius: 6px; white-space: nowrap; transform: translate(-50%, calc(-100% - 10px)); z-index: 5; }
+.tip b { font-family: var(--f-mono); font-weight: 500; }
+.note { font-size: 13px; color: var(--ink-2); background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; padding: 14px 16px; }
+.note ul { margin: 6px 0 0; padding-left: 18px; display: grid; gap: 5px; }
+code { font: 12.5px var(--f-mono); }
+footer { font-size: 12px; color: var(--ink-3); display: grid; gap: 4px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="eyebrow">Radxa Dragon Q6A · Qualcomm QCS6490 · Hexagon v68 cDSP</div>
+    <h1>NPU sysMon comparison: five captures of NCM</h1>
+    <p class="lede">Hexagon SDK sysMon recorded the NPU for 10 seconds in five situations: an idle board, NCM running on the CPU, and three versions of NCM running on the NPU. This page puts the parser's numbers and graphs for all five side by side.</p>
+    <div class="meta"><span>Tool: sysMonAppLE + sysmon_parser (Hexagon SDK 5.5.7)</span><span>Runtime: QAIRT 2.50, 16-bit mixed build</span><span>Captured 2026-10-24, NPU runs pinned to cores 4–7</span></div>
+  </header>
+
+  <section aria-label="Summary">
+    <div class="tiles" id="tiles"></div>
+  </section>
+
+  <section>
+    <h2>Overall summary</h2>
+    <p>Rows marked "parser" are copied from the parser's <code>dcvs_metric.txt</code>. "Time-averaged" rows are computed here from its 1 ms samples; they need samples covering the whole capture, so they are blank for the idle and CPU captures (the parser only samples the idle NPU about 1–2% of the time). Utilisation is the effective work rate divided by the clock. "Busy share" is a separate measurement: NPU compute per story from QNN profiling, divided by the normal time per story.</p>
+    <div class="panel tbl"><table id="overallTbl"></table></div>
+  </section>
+
+  <section>
+    <h2>Core performance over time</h2>
+    <p>The NPU's effective work rate (load), its vector-unit (HVX) packet rate, and its clock, for each capture. Zoom in to see individual NPU calls: short regular bursts for one story per call, blocks of about 40 ms for eight. In the batched capture the calls thin out after about 3.9 seconds: see the note at the end.</p>
+    <div class="panel" id="core">
+      <div class="controls">
+        <span>Window</span>
+        <div class="seg" role="group" aria-label="Time window" id="winBtns"></div>
+        <label style="display:flex;align-items:center;gap:8px;flex:1 1 260px">Start <input type="range" id="winStart" min="0" max="9900" step="10" value="0" aria-label="Window start (ms)"></label>
+        <span class="num" id="winLabel" style="font-family:var(--f-mono)"></span>
+      </div>
+      <div class="legend"><span><i class="sw" style="border-color:var(--c1)"></i>Effective work rate, MHz</span><span><i class="sw" style="border-color:var(--c3)"></i>HVX packets, MPPS</span><span><i class="sw dash" style="border-color:var(--ref)"></i>DSP clock, MHz</span></div>
+      <svg id="coreSvg" viewBox="0 0 900 640" role="img" aria-label="Five small line charts of NPU load, HVX packet rate and clock over 10 seconds"></svg>
+    </div>
+  </section>
+
+  <section>
+    <h2>Bus performance over time</h2>
+    <p>Memory traffic between the NPU and DDR. Same window as above. The batched run moves far more data, most likely because a batch of eight stories no longer fits in the 2 MB of on-chip memory (VTCM) the models were compiled for.</p>
+    <div class="panel" id="bus">
+      <div class="legend"><span><i class="sw" style="border-color:var(--c1)"></i>AXI read, MB/s</span><span><i class="sw" style="border-color:var(--c2)"></i>AXI write, MB/s</span></div>
+      <svg id="busSvg" viewBox="0 0 900 640" role="img" aria-label="Five small line charts of NPU memory read and write bandwidth over 10 seconds"></svg>
+      <p class="chart-sub" style="margin:8px 0 0">AXI read/write use the parser's 128-byte counters, the same ones its own bus graph plots. The bus clock vote was 806 MHz in the three NPU captures and 150 MHz in the idle and CPU captures.</p>
+    </div>
+  </section>
+
+  <section>
+    <h2>Time at each clock speed</h2>
+    <p>The NPU picks its clock itself (DCVS). With one story per call it ran at 941 MHz 96% of the time; the batched run spent 61% of the time above that, up to 1440 MHz. Shares are weighted by sample length.</p>
+    <div class="panel" id="clock">
+      <div class="legend" id="clockLegend"></div>
+      <svg id="clockSvg" viewBox="0 0 900 230" role="img" aria-label="Stacked bars of the share of time at each NPU clock speed per capture"></svg>
+      <details><summary>Show the numbers</summary><div class="tbl"><table id="clockTbl"></table></div></details>
+    </div>
+  </section>
+
+  <section>
+    <h2>NPU calls</h2>
+    <p>sysMon logs every call into the NPU's vector units (an "HVX invoke"). How long each call took, as a share of that capture's calls:</p>
+    <div class="grid3" id="hist"></div>
+    <div class="panel tbl">
+      <p class="chart-title">Invoke statistics, as the parser reports them</p>
+      <p class="chart-sub">The parser groups calls by "API"; these groups have not been matched to the generator and decoder graphs.</p>
+      <table id="invTbl"></table>
+    </div>
+  </section>
+
+  <section>
+    <h2>Per story</h2>
+    <p>Stories in each window are estimated from the call count (13 calls per batch of 1 or 8 stories). The NPU's cycles per story barely move between the first version and shared buffers; batching costs more cycles and much more DDR traffic per story, yet finishes stories faster because the NPU is rarely idle.</p>
+    <div class="grid3">
+      <div class="panel" id="psCyc"><p class="chart-title">NPU cycles per story</p><p class="chart-sub">Million cycles, from HVX invokes</p><svg viewBox="0 0 300 150" role="img" aria-label="Bar chart of NPU cycles per story"></svg></div>
+      <div class="panel" id="psDdr"><p class="chart-title">DDR traffic per story</p><p class="chart-sub">MB read + written, from HVX invokes</p><svg viewBox="0 0 300 150" role="img" aria-label="Bar chart of DDR megabytes per story"></svg></div>
+      <div class="panel" id="psBusy"><p class="chart-title">NPU busy share</p><p class="chart-sub">QNN compute ÷ normal time per story</p><svg viewBox="0 0 300 150" role="img" aria-label="Bar chart of NPU busy share per version"></svg></div>
+    </div>
+    <div class="panel tbl"><table id="storyTbl"></table></div>
+  </section>
+
+  <section>
+    <h2>Processor summary</h2>
+    <p>Every metric the parser reports in <code>Summary.csv</code>, average and maximum, copied as is (its averages differ from <code>dcvs_metric.txt</code>; see the notes). The parser leaves this table empty for the idle and CPU captures.</p>
+    <div class="panel tbl"><table id="procTbl"></table></div>
+  </section>
+
+  <section>
+    <h2>Read this before quoting the numbers</h2>
+    <div class="note"><ul>
+      <li><b>sysMon slows what it measures.</b> While recording, the first version ran at about 140 ms per story (126 normally) and shared buffers at 139 (105). For how busy the NPU really is, use the QNN busy share (46%, 55%, 91%).</li>
+      <li><b>sysMon stalled the batched run.</b> Its NPU calls came every 44 ms (median) for the first 3 s and slowed a little after; from 3.85 s on there were only 10 calls, with gaps of 0.55, 0.76, 1.1, 1.3 and 1.4 s. The whole run still averaged 105 ms per story, so it must have sped up again after sysMon stopped. Its 30% utilisation and ~208 ms per story therefore reflect sysMon, not the setup; per-call cycles and DDR traffic per call are not affected by the gaps.</li>
+      <li><b>Busy share carries about ±15%.</b> NPU compute per story was profiled with <code>qnn-net-run</code> in one session (4.76 ms per generator call at batch 1). The first version uses that batch-1 figure: same model, but its decoder returned logits (0.85 ms, measured in an earlier session). That earlier session measured 4.15 ms per generator call, so absolute values move between sessions; the ranking does not.</li>
+      <li><b>Different counters, different figures.</b> For the first version the parser gives AXI read as 2,308 MB/s in its overall summary (the 128-byte and 256-byte counters added: 111 + 2,197), 111 MB/s in its processor table (128-byte, averaged over active samples), 99 MB/s in <code>dcvs_metric.txt</code>, while the 128-byte samples average 61 MB/s over time. It also reports two active times (6.08 s in <code>dcvs_metric.txt</code>, 5.34 s in <code>Summary.csv</code>) and two average clocks for the batched run (1,246 MHz from its NPA votes, 1,148 MHz time-weighted). Compare captures within one row, not across rows.</li>
+      <li><b>HMX is left out.</b> The parser prints HMX figures, but this v68 NPU has no HMX unit.</li>
+      <li><b>One capture each.</b> The idle, first-version, shared-buffer and batched captures were taken in one session, starting below 60 °C; the CPU capture after a reboot.</li>
+      <li><b>The DSP hung</b> two minutes after the batched capture: that program took 11 s to close its NPU session (normally 3–7 ms), then the kernel logged <code>glink-edge: intent request timed out</code> every 10 s until a reboot. With the stall above, this points at sysMon combined with long batched NPU calls. Plain runs of the same setup closed normally and did not hang; do not record the multi-lane setup with sysMon.</li>
+    </ul></div>
+    <div class="note">
+      <b>Reproduce</b> (board, then laptop):
+      <ul>
+        <li><code>taskset -c 4-7 ~/ncm-venv/bin/python run_ncm_npu.py --bits a16w8mix -n 150 --out /tmp/s.txt &amp;</code> (add <code>--engine shm --batch 1</code> for shared buffers), wait 5 s, then <code>sudo ~/sysMonAppLE profiler --q6 cdsp --duration 10</code></li>
+        <li>Parse <code>/tmp/sysmon_cdsp.bin</code> with <code>tools/utils/sysmon/parser_linux_v2/HTML_Parser/sysmon_parser</code>, then <code>python3 report/make_sysmon_page.py logs/sysmon/run3 report/ncm_sysmon_comparison.html</code>.</li>
+      </ul>
+    </div>
+  </section>
+
+  <footer>
+    <span>Project: NCM (Next-Concept Modeling, arXiv 2610.14162) trained from scratch on TinyStories. Main report: ncm_npu_report.html.</span>
+    <span>Qualcomm, Hexagon, QAIRT and sysMon are trademarks or products of Qualcomm Technologies. Graphs and measurements are my own; not endorsed by Qualcomm.</span>
+  </footer>
+</div>
+
+<script>
+const DATA = /*DATA*/null;
+const NPU = DATA.filter(c => c.invokes.length);
+const byId = Object.fromEntries(DATA.map(c => [c.id, c]));
+const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+const NS = "http://www.w3.org/2000/svg";
+function el(tag, attrs, parent, text) {
+  const e = document.createElementNS(NS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  if (text !== undefined) e.textContent = text;
+  if (parent) parent.appendChild(e);
+  return e;
+}
+const fmt = (v, d = 0) => v === null || v === undefined ? "–" : Number(v).toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d });
+function niceMax(v) { const p = Math.pow(10, Math.floor(Math.log10(Math.max(v, 1)))); for (const m of [1, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10]) if (m * p >= v) return m * p; return 10 * p; }
+function tip(panel) { let t = panel.querySelector(".tip"); if (!t) { t = document.createElement("div"); t.className = "tip"; panel.appendChild(t); } return t; }
+function showTip(panel, svg, x, y, html) {
+  const t = tip(panel), r = svg.getBoundingClientRect(), pr = panel.getBoundingClientRect(), s = r.width / svg.viewBox.baseVal.width;
+  t.innerHTML = html; t.hidden = false;
+  let left = r.left - pr.left + x * s; const half = t.offsetWidth / 2;
+  left = Math.max(half + 4, Math.min(pr.width - half - 4, left));
+  t.style.left = left + "px"; t.style.top = (r.top - pr.top + y * s) + "px";
+}
+function hideTip(panel) { const t = panel.querySelector(".tip"); if (t) t.hidden = true; }
+function roundTop(x, y, w, h, r) { r = Math.min(r, w / 2, h); return `M${x},${y + h}V${y + r}Q${x},${y} ${x + r},${y}H${x + w - r}Q${x + w},${y} ${x + w},${y + r}V${y + h}Z`; }
+function roundRight(x, y, w, h, r) { r = Math.min(r, w, h / 2); return `M${x},${y}H${x + w - r}Q${x + w},${y} ${x + w},${y + r}V${y + h - r}Q${x + w},${y + h} ${x + w - r},${y + h}H${x}Z`; }
+function fillTable(id, head, rows, numCols) {
+  const t = document.getElementById(id); t.innerHTML = "";
+  const th = t.createTHead().insertRow();
+  head.forEach((h, i) => { const c = document.createElement("th"); c.textContent = h; if (i >= numCols) c.className = "n"; th.appendChild(c); });
+  const tb = t.createTBody();
+  rows.forEach(r => {
+    const tr = tb.insertRow();
+    if (r.group) { tr.className = "grp"; const c = tr.insertCell(); c.colSpan = head.length; c.textContent = r.group; return; }
+    r.forEach((v, i) => { const c = tr.insertCell(); c.textContent = v; if (i >= numCols) c.className = "n"; });
+  });
+}
+
+/* ---------- tiles ---------- */
+function drawTiles() {
+  const a = byId.v1, b = byId.v2b8x2;
+  const tiles = [
+    ["NPU busy share", `${a.per_story.busy_qnn}→${b.per_story.busy_qnn}`, "%", "first version → batch 8, 2 in flight (QNN profiling)"],
+    ["NPU clock, time-averaged", `${fmt(a.series.clk_avg)}→${fmt(b.series.clk_avg)}`, "MHz", "the NPU raises its own clock for the batched run, up to 1440 MHz"],
+    ["DDR traffic per story", `${fmt(a.per_story.ddr_rd + a.per_story.ddr_wr)}→${fmt(b.per_story.ddr_rd + b.per_story.ddr_wr)}`, "MB", "read + write per story, from the NPU call log"],
+    ["Idle and CPU-only runs", "0", "%", "NPU utilisation; clock stays at its lowest level, 365 MHz"],
+  ];
+  const box = document.getElementById("tiles"); box.innerHTML = "";
+  tiles.forEach(([k, v, u, d]) => { box.insertAdjacentHTML("beforeend", `<div class="tile"><div class="k">${k}</div><div class="v">${v}<small>${u}</small></div><div class="d">${d}</div></div>`); });
+}
+
+/* ---------- overall table ---------- */
+function drawOverall() {
+  const rows = [
+    ["What ran", c => c.what, true],
+    ["Captured time", c => fmt(c.dcvs.total_s, 2) + " s"],
+    ["NPU active time (parser)", c => fmt(c.dcvs.active_s, 2) + " s"],
+    ["NPU utilisation (parser)", c => fmt(c.dcvs.util) + "%"],
+    ["Effective work rate, time-averaged", c => c.series.eff_avg === undefined ? "–" : fmt(c.series.eff_avg) + " MHz"],
+    ["Clock, time-averaged", c => c.series.clk_avg === undefined ? "–" : fmt(c.series.clk_avg) + " MHz"],
+    ["Work rate ÷ clock", c => c.series.eff_avg === undefined ? "–" : fmt(100 * c.series.eff_avg / c.series.clk_avg) + "%"],
+    ["Average clock (parser, NPA)", c => fmt(c.dcvs.clk_mhz) + " MHz"],
+    ["QDSP6 load (parser)", c => fmt(c.dcvs.load_mhz) + " MCPS"],
+    ["Clock votes recorded", c => fmt(c.dcvs.clock_votes)],
+    ["Packets (parser)", c => fmt(c.dcvs.mpps) + " MPPS"],
+    ["HVX packets (parser)", c => c.dcvs.hvx_mpps === null ? "–" : fmt(c.dcvs.hvx_mpps) + " MPPS"],
+    ["AXI read (parser)", c => fmt(c.dcvs.axi_rd, 1) + " MB/s"],
+    ["AXI write (parser)", c => fmt(c.dcvs.axi_wr, 1) + " MB/s"],
+    ["AXI read 128B, time-averaged", c => c.series.rd_avg === undefined ? "–" : fmt(c.series.rd_avg, 1) + " MB/s"],
+    ["AXI write 128B, time-averaged", c => c.series.wr_avg === undefined ? "–" : fmt(c.series.wr_avg, 1) + " MB/s"],
+    ["NPU calls (HVX invokes)", c => c.invokes.length ? fmt(c.invokes.length) : "–"],
+    ["ms per story, normally", c => c.ms ? fmt(c.ms, 1) : "–"],
+    ["ms per story while recorded (≈)", c => c.per_story ? fmt(c.per_story.window_ms) : "–"],
+    ["NPU busy share (QNN)", c => c.per_story ? c.per_story.busy_qnn + "%" : "–"],
+  ];
+  const t = document.getElementById("overallTbl"); t.innerHTML = "";
+  const h = t.createTHead().insertRow(); h.insertCell().outerHTML = "<th>Metric</th>";
+  DATA.forEach(c => { const th = document.createElement("th"); th.className = "n"; th.textContent = c.label; h.appendChild(th); });
+  const tb = t.createTBody();
+  rows.forEach(([name, f, wrap]) => {
+    const tr = tb.insertRow(); tr.insertCell().textContent = name;
+    DATA.forEach(c => { const td = tr.insertCell(); td.textContent = f(c); td.className = "n"; if (wrap) { td.style.whiteSpace = "normal"; td.style.minWidth = "120px"; td.style.fontFamily = "var(--f-body)"; td.style.textAlign = "left"; td.style.color = "var(--ink-2)"; td.style.fontSize = "12px"; } });
+  });
+}
+
+/* ---------- time series (small multiples, shared window) ---------- */
+const WIN = { start: 0, width: 10000 };
+const WIDTHS = [[10000, "10 s"], [2000, "2 s"], [400, "400 ms"], [100, "100 ms"]];
+const PL = 64, PR = 884, PANEL_H = 112, GAP = 16, TOP = 4;
+
+function binSeries(s, keys, a, b, nb) {
+  // Each sample covers [t, t + per); spread its value over the bins it overlaps (time-weighted mean).
+  const bw = (b - a) / nb, acc = keys.map(() => new Float64Array(nb)), wt = new Float64Array(nb);
+  let lo = 0, hi = s.t.length;
+  while (lo < hi) { const m = (lo + hi) >> 1; if (s.t[m] + Math.max(s.per[m], 1) <= a) lo = m + 1; else hi = m; }
+  for (let i = lo; i < s.t.length && s.t[i] < b; i++) {
+    const t0 = Math.max(s.t[i], a), t1 = Math.min(s.t[i] + Math.max(s.per[i], 1), b);
+    for (let k = Math.floor((t0 - a) / bw); k < nb && a + k * bw < t1; k++) {
+      const o = Math.min(t1, a + (k + 1) * bw) - Math.max(t0, a + k * bw);
+      if (o <= 0) continue;
+      wt[k] += o; keys.forEach((key, j) => { acc[j][k] += s[key][i] * o; });
+    }
+  }
+  return keys.map((_, j) => Array.from(acc[j], (v, k) => wt[k] ? v / wt[k] : null));
+}
+function stepAt(list, t) { let v = list[0][1]; for (const [ti, vi] of list) { if (ti <= t) v = vi; else break; } return v; }
+
+function drawMultiples(svgId, panelId, lines, steps, unitNote) {
+  const svg = document.getElementById(svgId); svg.innerHTML = "";
+  const panel = document.getElementById(panelId);
+  const a = WIN.start, b = WIN.start + WIN.width, nb = Math.min(410, WIN.width);
+  const binned = DATA.map(c => binSeries(c.series, lines.map(l => l.key), a, b, nb));
+  let ymax = 1;
+  binned.forEach((bs, ci) => { bs.forEach(arr => arr.forEach(v => { if (v !== null && v > ymax) ymax = v; }));
+    steps.forEach(st => DATA[ci].series[st.key].forEach(([t, v]) => { if (t < b && v > ymax) ymax = v; })); });
+  ymax = niceMax(ymax * 1.04);
+  const x = t => PL + (PR - PL) * (t - a) / (b - a);
+  const cross = [];
+  DATA.forEach((c, ci) => {
+    const y0 = TOP + ci * (PANEL_H + GAP), y = v => y0 + PANEL_H - 18 - (PANEL_H - 30) * v / ymax, base = y(0);
+    el("text", { x: PL, y: y0 + 8, class: "lab" }, svg, c.label);
+    el("text", { x: PR, y: y0 + 8, "text-anchor": "end", class: "axis num" }, svg,
+      c.dcvs.util !== null ? `utilisation ${fmt(c.dcvs.util)}% · avg clock ${fmt(c.dcvs.clk_mhz)} MHz` : "");
+    [0, ymax / 2, ymax].forEach(v => {
+      el("line", { x1: PL, x2: PR, y1: y(v), y2: y(v), stroke: css("--grid"), "stroke-width": 1 }, svg);
+      el("text", { x: PL - 8, y: y(v) + 4, "text-anchor": "end", class: "axis num" }, svg, fmt(v));
+    });
+    steps.forEach(st => {
+      const pts = []; let last = stepAt(c.series[st.key], a);
+      pts.push([a, last]);
+      c.series[st.key].forEach(([t, v]) => { if (t > a && t < b) { pts.push([t, last]); pts.push([t, v]); last = v; } });
+      pts.push([Math.min(b, c.series.end), last]);
+      el("path", { d: "M" + pts.map(([t, v]) => `${x(t).toFixed(1)},${y(v).toFixed(1)}`).join("L"), fill: "none", stroke: css(st.color), "stroke-width": 1.5, "stroke-dasharray": "5 4" }, svg);
+    });
+    lines.forEach((l, j) => {
+      const arr = binned[ci][j]; let d = "", pen = false;
+      arr.forEach((v, k) => { const px = x(a + (k + .5) * (b - a) / nb); if (v === null) { pen = false; return; } d += (pen ? "L" : "M") + px.toFixed(1) + "," + y(v).toFixed(1); pen = true; });
+      if (l.area && d) { const first = arr.findIndex(v => v !== null);
+        let ad = ""; let open = false;
+        arr.forEach((v, k) => { const px = x(a + (k + .5) * (b - a) / nb);
+          if (v === null) { if (open) { ad += `L${px.toFixed(1)},${base}Z`; open = false; } return; }
+          ad += (open ? "L" : `M${px.toFixed(1)},${base}L`) + px.toFixed(1) + "," + y(v).toFixed(1); open = true; });
+        if (open) ad += `L${x(b).toFixed(1)},${base}Z`;
+        el("path", { d: ad, fill: css(l.color), opacity: .12 }, svg); }
+      if (d) el("path", { d, fill: "none", stroke: css(l.color), "stroke-width": 1.5, "stroke-linejoin": "round" }, svg);
+    });
+    el("line", { x1: PL, x2: PR, y1: base, y2: base, stroke: css("--ink-3"), "stroke-width": 1 }, svg);
+    const ch = el("line", { x1: 0, x2: 0, y1: y0 + 14, y2: base, stroke: css("--ink-3"), "stroke-width": 1, visibility: "hidden" }, svg);
+    cross.push({ ch, y0, base, ci });
+  });
+  const yb = TOP + DATA.length * (PANEL_H + GAP) - GAP - 18;
+  for (let i = 0; i <= 5; i++) { const t = a + (b - a) * i / 5;
+    el("text", { x: x(t), y: yb + 16, "text-anchor": i === 0 ? "start" : i === 5 ? "end" : "middle", class: "axis num" }, svg,
+      (b - a) >= 2000 ? (t / 1000).toFixed(1) + " s" : Math.round(t) + " ms"); }
+  const hit = el("rect", { x: PL, y: 0, width: PR - PL, height: yb, fill: "transparent" }, svg);
+  hit.addEventListener("mousemove", ev => {
+    const r = svg.getBoundingClientRect(), sx = (ev.clientX - r.left) * svg.viewBox.baseVal.width / r.width;
+    const sy = (ev.clientY - r.top) * svg.viewBox.baseVal.width / r.width;
+    const k = Math.max(0, Math.min(nb - 1, Math.floor((sx - PL) / (PR - PL) * nb))), t = a + (k + .5) * (b - a) / nb;
+    const ci = Math.max(0, Math.min(DATA.length - 1, Math.floor((sy - TOP) / (PANEL_H + GAP))));
+    cross.forEach(o => { o.ch.setAttribute("x1", x(t)); o.ch.setAttribute("x2", x(t)); o.ch.setAttribute("visibility", "visible"); });
+    const c = DATA[ci], vals = lines.map((l, j) => `${l.name} <b>${binned[ci][j][k] === null ? "–" : fmt(binned[ci][j][k])}</b>`)
+      .concat(steps.map(st => `${st.name} <b>${fmt(stepAt(c.series[st.key], t))}</b>`));
+    showTip(panel, svg, x(t), cross[ci].y0 + 18, `${c.label} · ${(b - a) >= 2000 ? (t / 1000).toFixed(2) + " s" : Math.round(t) + " ms"}<br>${vals.join(" · ")}`);
+  });
+  hit.addEventListener("mouseleave", () => { cross.forEach(o => o.ch.setAttribute("visibility", "hidden")); hideTip(panel); });
+}
+function drawTime() {
+  const s = document.getElementById("winStart");
+  s.max = 10000 - WIN.width; s.step = Math.max(1, WIN.width / 100); if (+s.value > +s.max) s.value = s.max;
+  WIN.start = +s.value; s.disabled = WIN.width >= 10000;
+  document.getElementById("winLabel").textContent = WIN.width >= 2000 ? `${(WIN.start / 1000).toFixed(1)}–${((WIN.start + WIN.width) / 1000).toFixed(1)} s` : `${WIN.start}–${WIN.start + WIN.width} ms`;
+  drawMultiples("coreSvg", "core", [{ key: "load", name: "work rate", color: "--c1", area: true }, { key: "hvx", name: "HVX", color: "--c3" }], [{ key: "clk", name: "clock", color: "--ref" }]);
+  drawMultiples("busSvg", "bus", [{ key: "rd", name: "read", color: "--c1", area: true }, { key: "wr", name: "write", color: "--c2" }], []);
+}
+function setupWindow() {
+  const box = document.getElementById("winBtns");
+  WIDTHS.forEach(([w, label]) => {
+    const b = document.createElement("button"); b.textContent = label; b.setAttribute("aria-pressed", w === WIN.width);
+    b.addEventListener("click", () => { WIN.width = w; box.querySelectorAll("button").forEach(x => x.setAttribute("aria-pressed", x === b)); drawTime(); });
+    box.appendChild(b);
+  });
+  const s = document.getElementById("winStart");
+  s.value = 3000; s.addEventListener("input", drawTime);
+}
+
+/* ---------- clock residency ---------- */
+const CLK_COLOR = { 941: "--o1", 1171: "--o2", 1306: "--o3", 1363: "--o4", 1440: "--o5" };
+const clkColor = mhz => CLK_COLOR[mhz] || (mhz < 600 ? "--idle" : "--o3");
+function drawClock() {
+  const svg = document.getElementById("clockSvg"); svg.innerHTML = "";
+  const panel = document.getElementById("clock");
+  const L = 170, R = 880, row = 40, bh = 24;
+  const levels = [...new Set(DATA.flatMap(c => Object.keys(c.series.share).filter(k => c.series.share[k] >= .5).map(Number)))].sort((p, q) => p - q);
+  document.getElementById("clockLegend").innerHTML = levels.map(m => `<span><i class="sw box" style="background:var(${clkColor(m)})"></i>${m} MHz</span>`).join("");
+  DATA.forEach((c, i) => {
+    const y = 6 + i * row; let x0 = L;
+    el("text", { x: L - 12, y: y + bh / 2 + 4, "text-anchor": "end" }, svg, c.label);
+    const parts = levels.map(m => [m, c.series.share[m] || 0]).filter(p => p[1] > 0);
+    parts.forEach(([m, pct], j) => {
+      const w = (R - L) * pct / 100, last = j === parts.length - 1;
+      const seg = el(last ? "path" : "rect", last ? { d: roundRight(x0, y, Math.max(w, 1), bh, 4), fill: css(clkColor(m)) } : { x: x0, y, width: Math.max(w - 2, 1), height: bh, fill: css(clkColor(m)) }, svg);
+      if (w > 64) el("text", { x: x0 + 8, y: y + bh / 2 + 4, class: "num", style: `fill:${m >= 1306 || m < 600 ? "#fff" : css("--ink")}` }, svg, `${m} · ${pct.toFixed(0)}%`);
+      seg.addEventListener("mousemove", () => showTip(panel, svg, x0 + w / 2, y, `${c.label}<br><b>${m} MHz</b> for ${pct.toFixed(1)}% of the capture`));
+      seg.addEventListener("mouseleave", () => hideTip(panel));
+      x0 += w;
+    });
+  });
+  fillTable("clockTbl", ["Capture", ...levels.map(m => m + " MHz")], DATA.map(c => [c.label, ...levels.map(m => c.series.share[m] ? c.series.share[m].toFixed(1) + "%" : "–")]), 1);
+}
+
+/* ---------- invoke histograms + table ---------- */
+function drawHist() {
+  const box = document.getElementById("hist"); box.innerHTML = "";
+  const maxMs = Math.ceil(Math.max(...NPU.flatMap(c => c.invokes.map(i => i[0]))) / 5) * 5 + 1;
+  NPU.forEach(c => {
+    const p = document.createElement("div"); p.className = "panel";
+    p.innerHTML = `<p class="chart-title">${c.label}</p><p class="chart-sub">${fmt(c.invokes.length)} calls in 10 s</p>`;
+    box.appendChild(p);
+    const svg = el("svg", { viewBox: "0 0 300 150", role: "img", "aria-label": `Histogram of NPU call durations for ${c.label}` }, p);
+    const L = 34, R = 292, T = 6, B = 120, nb = maxMs, cnt = new Array(nb).fill(0);
+    c.invokes.forEach(i => cnt[Math.min(nb - 1, Math.round(i[0]))]++);
+    const pct = cnt.map(v => 100 * v / c.invokes.length), ym = niceMax(Math.max(...pct)), bw = (R - L) / nb;
+    [0, ym].forEach(v => { el("line", { x1: L, x2: R, y1: B - (B - T) * v / ym, y2: B - (B - T) * v / ym, stroke: css("--grid") }, svg); el("text", { x: L - 6, y: B - (B - T) * v / ym + 4, "text-anchor": "end", class: "axis num" }, svg, v + "%"); });
+    pct.forEach((v, k) => { if (!v) return; const h = (B - T) * v / ym;
+      const r = el("path", { d: roundTop(L + k * bw + .5, B - h, Math.max(bw - 1, 1.5), h, 1.5), fill: css("--c1") }, svg);
+      r.addEventListener("mousemove", () => showTip(p, svg, L + (k + .5) * bw, B - h, `${k} ms: <b>${cnt[k]}</b> calls (${v.toFixed(1)}%)`));
+      r.addEventListener("mouseleave", () => hideTip(p)); });
+    el("line", { x1: L, x2: R, y1: B, y2: B, stroke: css("--ink-3") }, svg);
+    [0, Math.round(maxMs / 2), maxMs - 1].forEach(m => el("text", { x: L + (m + .5) * bw, y: B + 14, "text-anchor": "middle", class: "axis num" }, svg, m + " ms"));
+    el("text", { x: (L + R) / 2, y: B + 28, "text-anchor": "middle", class: "axis" }, svg, "time per call");
+  });
+  const head = ["Capture", "API", "Calls", "Active ms avg", "max", "Mcycles avg", "DDR read MB (128B)", "DDR write MB (128B)"];
+  const rows = [];
+  NPU.forEach(c => c.invoke_stats.forEach(s => {
+    const g = n => s.rows.find(r => r[0] === n) || [0, 0, null, null];
+    rows.push([c.label, s.api, fmt(s.count), fmt(g("HVX active time")[2], 2), fmt(g("HVX active time")[3], 0), fmt(g("Total cycles")[2], 2), fmt(g("128B_DDR read")[2], 2), fmt(g("128B_DDR write")[2], 2)]);
+  }));
+  fillTable("invTbl", head, rows, 2);
+}
+
+/* ---------- per story bars ---------- */
+function bars(panelId, vals, unit, max) {
+  const p = document.getElementById(panelId), svg = p.querySelector("svg"); svg.innerHTML = "";
+  const L = 10, R = 290, T = 22, B = 118, n = vals.length, slot = (R - L) / n, bw = Math.min(56, slot * .55);
+  const ym = max || niceMax(Math.max(...vals.map(v => v[1])) * 1.05);
+  el("line", { x1: L, x2: R, y1: B, y2: B, stroke: css("--ink-3") }, svg);
+  vals.forEach(([label, v], i) => {
+    const cx = L + slot * (i + .5), h = (B - T) * v / ym;
+    const r = el("path", { d: roundTop(cx - bw / 2, B - h, bw, h, 4), fill: css("--c1") }, svg);
+    el("text", { x: cx, y: B - h - 6, "text-anchor": "middle", class: "num " + (i === n - 1 ? "strong" : "") }, svg, fmt(v, v < 10 && unit !== "%" ? 1 : 0) + (unit === "%" ? "%" : ""));
+    el("text", { x: cx, y: B + 15, "text-anchor": "middle", class: "axis" }, svg, label);
+    r.addEventListener("mousemove", () => showTip(p, svg, cx, B - h, `${label}: <b>${fmt(v, 1)}</b> ${unit}`));
+    r.addEventListener("mouseleave", () => hideTip(p));
+  });
+}
+function drawStory() {
+  const short = { v1: "First", v2b1: "Shared", v2b8x2: "Batch 8×2" };
+  bars("psCyc", NPU.map(c => [short[c.id], c.per_story.mcycles]), "M cycles");
+  bars("psDdr", NPU.map(c => [short[c.id], c.per_story.ddr_rd + c.per_story.ddr_wr]), "MB");
+  bars("psBusy", NPU.map(c => [short[c.id], c.per_story.busy_qnn]), "%", 100);
+  fillTable("storyTbl", ["Version", "Stories", "ms/story recorded", "ms/story normal", "Mcycles/story", "DDR rd MB", "DDR wr MB", "QNN ms", "Busy"],
+    NPU.map(c => [c.label, fmt(c.per_story.stories), fmt(c.per_story.window_ms), fmt(c.ms, 1), fmt(c.per_story.mcycles, 1), fmt(c.per_story.ddr_rd, 1), fmt(c.per_story.ddr_wr, 1), fmt(c.per_story.qnn_npu_ms), c.per_story.busy_qnn + "%"]), 1);
+}
+
+/* ---------- processor summary ---------- */
+function drawProc() {
+  const sections = [];
+  NPU.forEach(c => Object.entries(c.summary).forEach(([sec, rows]) => {
+    if (/HMX|summary|Summary|Report|CHIPSET|SUBSYSTEM|VERSION/.test(sec)) return;
+    let s = sections.find(x => x.name === sec); if (!s) sections.push(s = { name: sec, metrics: [] });
+    rows.forEach(r => { if (/HMX/.test(r[0])) return; if (!s.metrics.find(m => m[0] === r[0])) s.metrics.push([r[0], r[1]]); });
+  }));
+  const short = { v1: "First", v2b1: "Shared", v2b8x2: "Batch 8×2" };
+  const head = ["Metric", "Unit", ...NPU.flatMap(c => [short[c.id] + " avg", "max"])];
+  const rows = [];
+  sections.filter(s => s.metrics.length).forEach(s => {
+    rows.push({ group: s.name.trim() });
+    s.metrics.forEach(([m, u]) => rows.push([m, u, ...NPU.flatMap(c => { const r = (c.summary[s.name] || []).find(x => x[0] === m); return r ? [fmt(r[2], 2), fmt(r[3], 2)] : ["–", "–"]; })]));
+  });
+  fillTable("procTbl", head, rows, 2);
+}
+
+function drawAll() { drawTiles(); drawOverall(); drawTime(); drawClock(); drawHist(); drawStory(); drawProc(); }
+setupWindow();
+drawAll();
+window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", drawAll);
+new MutationObserver(drawAll).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+</script>
+</body>
+</html>

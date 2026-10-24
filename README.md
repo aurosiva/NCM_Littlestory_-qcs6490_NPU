@@ -151,13 +151,20 @@ the time per story.
 | NPU compute per story | 58 ms | 58 ms | 60 ms |
 | **NPU busy** | **46%** | **55%** | **91%** |
 | sysMon utilisation | 45% | 48% | 30%* |
-| sysMon average NPU clock | 949 MHz | 950 MHz | 1246 MHz (up to 1440) |
+| NPU clock, time-averaged (sysMon samples) | 951 MHz | 951 MHz | 1148 MHz (up to 1440) |
 | DDR traffic per story (sysMon) | 9 MB | 10 MB | 152 MB |
 
-\* sysMon slowed this setup from 66 to about 200 ms per story, so its utilisation is not
-representative. Its clock and DDR numbers are: a batch of 8 no longer fits in the 2 MB VTCM and
-spills to DDR, and the NPU raises its clock to compensate. sysMon captures of an idle board and
-of NCM on the CPU both stay at 0% and 364 MHz.
+\* sysMon stalled this setup: after about 3.9 s of the capture its NPU calls came only every
+0.5–1.4 s, so its utilisation (and ~200 ms per story) reflect sysMon, not the setup. Per-call
+cycles and DDR traffic per call are not affected. The 15–17× DDR traffic per story most likely
+means a batch of 8 no longer fits in the 2 MB VTCM the models were compiled for. The parser's own
+average clock for this run is 1246 MHz (from its NPA votes); the time-weighted figure is 1148 MHz.
+sysMon captures of an idle board and of NCM on the CPU both stay at 0% and the lowest clock
+(365 MHz). Full comparison: [`report/ncm_sysmon_comparison.html`](report/ncm_sysmon_comparison.html).
+
+NPU compute per story moves about ±15% between profiling sessions (an earlier session measured
+4.15 ms per generator call instead of 4.76), so the busy shares are approximate; their order is not.
+The first version's figure uses the batch-1 graph profiled in the same session (same model).
 
 NPU time per call by batch size: generator 4.8 / 21.8 / 39.5 ms for 1 / 4 / 8 stories (4.8 / 5.5 /
 4.9 ms per story), decoder 1.0 / 6.8 / 6.1 ms. The NPU's work per story does not shrink with
@@ -466,7 +473,7 @@ report. Notes for this board:
   again. Moving it into C, or the codebook head onto the NPU, has not been tried.
 - No NPU performance mode is requested (`--perf_profile burst` changed the profiled call time by
   only ~5%).
-- Batch 8 spills out of VTCM (15× the DDR traffic per story). A graph tiled to fit VTCM, or
+- Batch 8 most likely spills out of VTCM (15–17× the DDR traffic per story). A graph tiled to fit VTCM, or
   more HVX threads, might lower the ~58 ms of NPU compute per story; not tried.
 - The 8-bit build was not rebuilt for batching or re-measured with pinning.
 - Agreement with fp32 is measured per level with identical inputs. NPU-generated stories have
