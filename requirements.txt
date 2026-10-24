@@ -1,0 +1,12 @@
+# Laptop (training, export, evaluation). Install torch from the CUDA 12.8 index for RTX 50-series:
+#   pip install torch==2.11.0 --index-url https://download.pytorch.org/whl/cu128
+torch==2.11.0
+datasets==5.1.0
+tokenizers==0.23.3
+numpy==2.2.6
+onnx==1.23.2
+onnxruntime==1.23.2
+onnxscript==0.7.2
+tqdm==4.70.1
+transformers==5.20.2   # only for compare.py (GPT-2 Large scoring)
+# Board (CPU and NPU runners): pip install numpy onnxruntime tokenizers

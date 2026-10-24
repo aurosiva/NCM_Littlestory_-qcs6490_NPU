@@ -1,0 +1,418 @@
+<title>NCM on Hexagon NPU</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@600&display=swap">
+<style>
+/* Layout: a single lab-notebook column; summary tiles first, then one section per question,
+   each chart followed by a collapsible table of its numbers. */
+:root {
+  --bg: #f6f7f8;
+  --surface: #fcfcfb;
+  --ink: #111417;
+  --ink-2: #4c5258;
+  --ink-3: #737a81;
+  --rule: #dfe2e5;
+  --grid: #e9ebed;
+  --npu: #2a78d6;        /* categorical slot 1 */
+  --s2: #eb6834;         /* slot 2 */
+  --s3: #1baf7a;         /* slot 3 */
+  --cpu: #9aa0a6;        /* neutral for the comparison bars */
+  --cpu-ink: #5d636a;
+  --o1: #86b6ef; --o2: #3987e5; --o3: #256abf; --o4: #104281;  /* ordinal: clock levels */
+  --npu-wash: rgba(42,120,214,.12);
+  --f-display: "IBM Plex Sans Condensed", "Arial Narrow", "Helvetica Neue", Arial, sans-serif;
+  --f-body: "IBM Plex Sans", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --f-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #121416; --surface: #1a1c1e; --ink: #eef0f2; --ink-2: #b9bfc5; --ink-3: #8d949b;
+    --rule: #2c3034; --grid: #25292c; --npu: #3987e5; --s2: #d95926; --s3: #199e70;
+    --cpu: #6b7177; --cpu-ink: #aab0b6; --o1: #184f95; --o2: #256abf; --o3: #3987e5; --o4: #86b6ef;
+    --npu-wash: rgba(57,135,229,.16); color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #121416; --surface: #1a1c1e; --ink: #eef0f2; --ink-2: #b9bfc5; --ink-3: #8d949b;
+  --rule: #2c3034; --grid: #25292c; --npu: #3987e5; --s2: #d95926; --s3: #199e70;
+  --cpu: #6b7177; --cpu-ink: #aab0b6; --o1: #184f95; --o2: #256abf; --o3: #3987e5; --o4: #86b6ef;
+  --npu-wash: rgba(57,135,229,.16); color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--ink); font: 15px/1.55 var(--f-body); }
+.wrap { max-width: 980px; margin: 0 auto; padding-block: 40px 64px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+  display: grid; gap: 44px; }
+header { display: grid; gap: 10px; }
+.eyebrow { font: 500 12px/1 var(--f-mono); letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3); }
+h1 { font: 600 clamp(30px, 5vw, 44px)/1.05 var(--f-display); margin: 0; text-wrap: balance; letter-spacing: -.01em; }
+h2 { font: 600 22px/1.2 var(--f-display); margin: 0; text-wrap: balance; }
+.lede { color: var(--ink-2); max-width: 66ch; margin: 0; }
+.meta { font: 12px/1.6 var(--f-mono); color: var(--ink-3); display: flex; flex-wrap: wrap; gap: 4px 18px; }
+section { display: grid; gap: 14px; min-width: 0; }
+section > p { margin: 0; color: var(--ink-2); max-width: 70ch; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
+.tile { background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; padding: 16px 18px; display: grid; gap: 6px; align-content: start; }
+.tile .k { font: 500 11px/1.2 var(--f-mono); letter-spacing: .06em; text-transform: uppercase; color: var(--ink-3); }
+.tile .v { font: 600 34px/1 var(--f-display); font-variant-numeric: tabular-nums; }
+.tile .v small { font: 500 15px var(--f-body); color: var(--ink-2); margin-left: 4px; }
+.tile .d { font-size: 13px; color: var(--ink-2); }
+.panel { background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; padding: 18px 18px 12px; min-width: 0; position: relative; }
+.chart-title { font: 600 14px/1.3 var(--f-body); margin: 0 0 2px; }
+.chart-sub { font-size: 13px; color: var(--ink-3); margin: 0 0 10px; }
+svg { display: block; width: 100%; height: auto; overflow: visible; }
+svg text { font-family: var(--f-body); fill: var(--ink-2); font-size: 12px; }
+svg .num { font-family: var(--f-mono); font-variant-numeric: tabular-nums; }
+svg .axis { fill: var(--ink-3); font-size: 11px; }
+svg .strong { fill: var(--ink); font-weight: 600; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 13px; color: var(--ink-2); margin: 2px 0 8px; }
+.legend span { display: inline-flex; align-items: center; gap: 7px; }
+.sw { width: 14px; height: 4px; border-radius: 2px; display: inline-block; }
+.sw.box { height: 10px; width: 10px; border-radius: 2px; }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; }
+details { margin-top: 8px; border-top: 1px solid var(--rule); padding-top: 8px; }
+summary { cursor: pointer; font-size: 13px; color: var(--ink-2); }
+summary:focus-visible, button:focus-visible { outline: 2px solid var(--npu); outline-offset: 2px; border-radius: 3px; }
+.tbl { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 13px; margin-top: 8px; }
+th, td { text-align: left; padding: 6px 10px 6px 0; border-bottom: 1px solid var(--grid); white-space: nowrap; }
+th { font-weight: 500; color: var(--ink-3); font-size: 12px; }
+td.n, th.n { text-align: right; font-family: var(--f-mono); font-variant-numeric: tabular-nums; }
+.tip { position: absolute; pointer-events: none; background: var(--ink); color: var(--surface); font: 12px/1.45 var(--f-body);
+  padding: 7px 9px; border-radius: 6px; white-space: nowrap; transform: translate(-50%, calc(-100% - 10px)); z-index: 5; }
+.tip b { font-family: var(--f-mono); font-weight: 500; }
+.note { font-size: 13px; color: var(--ink-2); background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; padding: 14px 16px; }
+.note ul { margin: 6px 0 0; padding-left: 18px; display: grid; gap: 4px; }
+.pill { display: inline-block; font: 500 11px/1 var(--f-mono); padding: 4px 7px; border-radius: 99px; background: var(--npu-wash); color: var(--ink); vertical-align: 2px; }
+footer { font-size: 12px; color: var(--ink-3); display: grid; gap: 4px; }
+@media (prefers-reduced-motion: no-preference) { .bar { transition: opacity .15s; } }
+</style>
+
+<div class="wrap">
+  <header>
+    <div class="eyebrow">Radxa Dragon Q6A · Qualcomm QCS6490 · Hexagon v68</div>
+    <h1>Next-Concept Modeling on the Hexagon NPU</h1>
+    <p class="lede">A 20M-parameter NCM model, trained from scratch on TinyStories, writes a 128-token story in 12 coarse-to-fine steps. This page compares running it on the board's CPU and on its NPU: speed, how busy the NPU is (Qualcomm sysMon), and how closely the quantized NPU model matches the full-precision one.</p>
+    <div class="meta"><span>Model: v2 preset, 8.0M tokenizer + 11.9M generator</span><span>Toolchain: QAIRT 2.50, Hexagon SDK 5.5.7 sysMon</span><span>Measured 2026-10-24</span></div>
+  </header>
+
+  <section aria-label="Summary">
+    <div class="tiles">
+      <div class="tile"><div class="k">NPU time per story</div><div class="v">143<small>ms</small></div><div class="d">16-bit mixed build, 48 stories, warm</div></div>
+      <div class="tile"><div class="k">vs tuned CPU</div><div class="v">1.9×<small>faster</small></div><div class="d">CPU best at one story at a time: 276 ms</div></div>
+      <div class="tile"><div class="k">NPU utilisation</div><div class="v">23<small>%</small></div><div class="d">0% at idle and while NCM runs on the CPU</div></div>
+      <div class="tile"><div class="k">Matches fp32 model</div><div class="v">91–98<small>%</small></div><div class="d">same code chosen, levels 2–12; decoder 99.7%</div></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Time per story</h2>
+    <p>Every row generates the same kind of story with the same model on the same board, measured warm over 48 stories. The CPU rows show how much its result depends on thread settings: using all 8 cores is the slowest option, because work spreads onto the slow A55 cores.</p>
+    <div class="panel" id="speed">
+      <p class="chart-title">Milliseconds per story, lower is better</p>
+      <div class="legend"><span><i class="sw box" style="background:var(--npu)"></i>Hexagon NPU</span><span><i class="sw box" style="background:var(--cpu)"></i>CPU (onnxruntime INT8)</span></div>
+      <svg id="speedSvg" viewBox="0 0 900 300" role="img" aria-label="Bar chart of milliseconds per story for CPU and NPU settings"></svg>
+      <details><summary>Show the numbers</summary><div class="tbl"><table id="speedTbl"></table></div></details>
+    </div>
+    <div class="panel" id="split">
+      <p class="chart-title">Where the NPU run's 143 ms goes</p>
+      <div class="legend"><span><i class="sw box" style="background:var(--npu)"></i>Inside the 13 NPU calls (12 generator + 1 decoder)</span><span><i class="sw box" style="background:var(--cpu)"></i>Python on the CPU between calls</span></div>
+      <svg id="splitSvg" viewBox="0 0 900 70" role="img" aria-label="Stacked bar: 98 ms in NPU calls, 45 ms on the CPU"></svg>
+      <p class="chart-sub" style="margin:6px 0 0">The 98 ms includes copying data to and from the NPU. sysMon puts the NPU's own compute at roughly 50–85 ms of it.</p>
+    </div>
+  </section>
+
+  <section>
+    <h2>Is the NPU doing the work?</h2>
+    <p>Three 10-second sysMon captures of the NPU (the "compute DSP"): nothing running, NCM running on the CPU, and NCM running on the NPU. The line is the NPU's effective work rate, its real busy cycles per second. The CPU run leaves the NPU as idle as doing nothing at all.</p>
+    <div class="panel" id="lanes">
+      <p class="chart-title">NPU effective work rate (MHz), 50 ms averages</p>
+      <p class="chart-sub">Same scale in all three panels. Hover for values.</p>
+      <svg id="lanesSvg" viewBox="0 0 900 390" role="img" aria-label="Three small charts of NPU work rate over 10 seconds"></svg>
+      <details><summary>Show the numbers</summary><div class="tbl"><table id="sysTbl"></table></div></details>
+    </div>
+    <div class="grid2">
+      <div class="panel" id="zoom">
+        <p class="chart-title">Zoom: 400 ms of the NPU run, 1 ms samples</p>
+        <p class="chart-sub">Short bursts of work separated by gaps where the NPU waits for the CPU.</p>
+        <svg id="zoomSvg" viewBox="0 0 440 240" role="img" aria-label="NPU work rate per millisecond over 400 milliseconds"></svg>
+      </div>
+      <div class="panel" id="clock">
+        <p class="chart-title">Time spent at each NPU clock speed</p>
+        <p class="chart-sub">Share of each 10 s capture.</p>
+        <div class="legend" id="clockLegend"></div>
+        <svg id="clockSvg" viewBox="0 0 440 170" role="img" aria-label="Stacked bars of time at each clock level"></svg>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Does quantization change the answers?</h2>
+    <p>For 16 stories, each level's input was given to both the quantized model and the full-precision (fp32) model, and we counted how often they picked the same code. Both always continue from the fp32 choice, so an early difference can't snowball. Level 1 is a single code and always matches.</p>
+    <div class="panel" id="acc">
+      <p class="chart-title">Same code as fp32, % per level</p>
+      <div class="legend"><span><i class="sw" style="background:var(--npu)"></i>NPU 16-bit mixed</span><span><i class="sw" style="background:var(--s2)"></i>NPU 8-bit</span><span><i class="sw" style="background:var(--s3)"></i>CPU INT8 (laptop check)</span></div>
+      <svg id="accSvg" viewBox="0 0 900 330" role="img" aria-label="Line chart of agreement with fp32 per level for three builds"></svg>
+      <details><summary>Show the numbers</summary><div class="tbl"><table id="accTbl"></table></div></details>
+    </div>
+    <p>The 8-bit NPU build is fastest (107 ms) but loses up to 41 points at level 3. The v68 NPU cannot multiply two 16-bit activation tensors, so the recommended build runs everything at 16 bits except the attention multiplies, which stay at 8.</p>
+  </section>
+
+  <section>
+    <h2>Story quality</h2>
+    <p>Quality is set by the model, not the hardware. Scored by GPT-2 Large on 256 stories per seed; lower perplexity reads more naturally, and entropy near the real text means it is not just repeating itself.</p>
+    <div class="panel tbl">
+      <table>
+        <thead><tr><th>Text</th><th class="n">GPT-2 perplexity</th><th class="n">Word entropy</th><th class="n">Doubled words</th></tr></thead>
+        <tbody>
+          <tr><td>Real TinyStories</td><td class="n">9.1</td><td class="n">3.96</td><td class="n">0.0%</td></tr>
+          <tr><td>NCM base preset (CPU INT8)</td><td class="n">54.9 / 58.6</td><td class="n">4.00</td><td class="n">4.8%</td></tr>
+          <tr><td>NCM v2 preset (CPU INT8) <span class="pill">deployed</span></td><td class="n">53.1 / 49.6</td><td class="n">3.95</td><td class="n">2.7%</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2>How these numbers were measured</h2>
+    <div class="note">
+      <ul>
+        <li>Speed: warm process, 48 stories, one story per call unless "4 per batch". NPU runs use 4 numpy threads; the CPU's best setting is 4 onnxruntime threads and 1 numpy thread.</li>
+        <li>sysMon was off for speed runs. With sysMon recording, NPU runs slow to about 177 ms per story.</li>
+        <li>sysMon reports two active-time figures for the NPU run (2.8 s and 3.6 s of 10 s). Utilisation (23%) is the effective work rate divided by the clock, which these samples reproduce (229 / 958 MHz).</li>
+        <li>Agreement for the CPU INT8 build was checked on the laptop with 8 stories; the NPU builds on the board with 16. NPU-generated stories have not been scored by GPT-2 separately.</li>
+        <li>Each model was trained once; differences between presets come from single runs.</li>
+      </ul>
+    </div>
+  </section>
+
+  <footer>
+    <span>Method: Next-Concept Modeling, arXiv 2610.14162; HazyResearch/ncm (MIT) used as the reference design. Data: TinyStories.</span>
+    <span>Qualcomm, Hexagon and QAIRT are trademarks of Qualcomm Technologies. Measurements are my own; not endorsed by Qualcomm.</span>
+  </footer>
+</div>
+
+<script>
+const DATA = /*DATA*/null;
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const NS = "http://www.w3.org/2000/svg";
+function el(tag, attrs, parent, text) {
+  const e = document.createElementNS(NS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  if (text != null) e.textContent = text;
+  if (parent) parent.appendChild(e);
+  return e;
+}
+function tipFor(panel) {
+  let t = panel.querySelector(".tip");
+  if (!t) { t = document.createElement("div"); t.className = "tip"; t.hidden = true; panel.appendChild(t); }
+  return t;
+}
+function showTip(panel, svg, x, y, html) {
+  const t = tipFor(panel), r = svg.getBoundingClientRect(), pr = panel.getBoundingClientRect();
+  const sx = r.width / svg.viewBox.baseVal.width, sy = r.height / svg.viewBox.baseVal.height;
+  t.innerHTML = html; t.hidden = false;
+  let left = r.left - pr.left + x * sx;
+  left = Math.max(70, Math.min(pr.width - 70, left));
+  t.style.left = left + "px"; t.style.top = (r.top - pr.top + y * sy) + "px";
+}
+function hideTip(panel) { const t = panel.querySelector(".tip"); if (t) t.hidden = true; }
+function roundRight(x, y, w, h, r) { // bar with rounded data-end on the right, square at the baseline
+  r = Math.min(r, w, h / 2);
+  return `M${x},${y}H${x + w - r}Q${x + w},${y} ${x + w},${y + r}V${y + h - r}Q${x + w},${y + h} ${x + w - r},${y + h}H${x}Z`;
+}
+function table(id, head, rows) {
+  const t = document.getElementById(id);
+  t.innerHTML = "<thead><tr>" + head.map((h, i) => `<th class="${i ? "n" : ""}">${h}</th>`).join("") + "</tr></thead><tbody>" +
+    rows.map(r => "<tr>" + r.map((c, i) => `<td class="${i ? "n" : ""}">${c}</td>`).join("") + "</tr>").join("") + "</tbody>";
+}
+
+/* ---------- speed bars ---------- */
+const SPEED = [
+  { label: "CPU · 8 onnxruntime threads", ms: 808, npu: false },
+  { label: "CPU · default thread settings", ms: 586, npu: false },
+  { label: "CPU · tuned threads", ms: 276, npu: false },
+  { label: "CPU · tuned, 4 stories per batch", ms: 196, npu: false },
+  { label: "NPU · 16-bit mixed (recommended)", ms: 143, npu: true, rec: true },
+  { label: "NPU · 8-bit", ms: 107, npu: true },
+];
+function drawSpeed() {
+  const svg = document.getElementById("speedSvg"); svg.innerHTML = "";
+  const panel = document.getElementById("speed");
+  const L = 250, R = 860, top = 14, row = 44, bh = 22, max = 900;
+  const x = v => L + (R - L) * v / max;
+  for (let v = 0; v <= max; v += 300) {
+    el("line", { x1: x(v), x2: x(v), y1: top - 4, y2: top + row * SPEED.length - 10, stroke: css("--grid"), "stroke-width": 1 }, svg);
+    el("text", { x: x(v), y: top + row * SPEED.length + 6, "text-anchor": "middle", class: "axis num" }, svg, v);
+  }
+  SPEED.forEach((d, i) => {
+    const y = top + i * row;
+    el("text", { x: L - 12, y: y + bh / 2 + 4, "text-anchor": "end", class: d.rec ? "strong" : "" }, svg, d.label);
+    const p = el("path", { d: roundRight(L, y, x(d.ms) - L, bh, 4), fill: d.npu ? css("--npu") : css("--cpu"), class: "bar" }, svg);
+    el("text", { x: x(d.ms) + 8, y: y + bh / 2 + 4, class: "num " + (d.rec ? "strong" : "") }, svg, d.ms + " ms");
+    const hit = el("rect", { x: 0, y: y - 8, width: 900, height: row - 4, fill: "transparent" }, svg);
+    hit.addEventListener("mousemove", () => { p.style.opacity = .8; showTip(panel, svg, x(d.ms), y, `${d.label}<br><b>${d.ms} ms</b> per story · ${(276 / d.ms).toFixed(2)}× the tuned CPU speed`); });
+    hit.addEventListener("mouseleave", () => { p.style.opacity = 1; hideTip(panel); });
+  });
+  el("line", { x1: L, x2: L, y1: top - 6, y2: top + row * SPEED.length - 10, stroke: css("--ink-3"), "stroke-width": 1 }, svg);
+  table("speedTbl", ["Setup", "ms per story"], SPEED.map(d => [d.label, d.ms]));
+}
+
+/* ---------- split ---------- */
+function drawSplit() {
+  const svg = document.getElementById("splitSvg"); svg.innerHTML = "";
+  const L = 20, R = 860, total = 143, y = 12, h = 24, x = v => (R - L) * v / total;
+  const a = x(98);
+  el("rect", { x: L, y, width: a - 1, height: h, rx: 0, fill: css("--npu") }, svg);
+  el("path", { d: roundRight(L + a + 1, y, x(45) - 1, h, 4), fill: css("--cpu") }, svg);
+  el("text", { x: L + 10, y: y + h / 2 + 4, fill: "#fff", style: "fill:#fff" , class: "num"}, svg, "98 ms in NPU calls");
+  el("text", { x: L + a + 10, y: y + h / 2 + 4, style: `fill:${css("--surface")}`, class: "num" }, svg, "45 ms CPU");
+  el("text", { x: L, y: y + h + 22, class: "axis num" }, svg, "0");
+  el("text", { x: R, y: y + h + 22, "text-anchor": "end", class: "axis num" }, svg, "143 ms");
+}
+
+/* ---------- three lanes ---------- */
+function drawLanes() {
+  const svg = document.getElementById("lanesSvg"); svg.innerHTML = "";
+  const panel = document.getElementById("lanes");
+  const runs = [["idle", "Nothing running"], ["cpu", "NCM on the CPU"], ["npu", "NCM on the NPU"]];
+  const L = 52, R = 880, laneH = 92, gap = 34, top = 16, ymax = 500;
+  const nb = DATA.idle.bins.length, x = i => L + (R - L) * i / (nb - 1);
+  runs.forEach(([key, name], li) => {
+    const y0 = top + li * (laneH + gap), yb = y0 + laneH, y = v => yb - laneH * Math.min(v, ymax) / ymax;
+    el("text", { x: L, y: y0 - 4, class: "strong" }, svg, name);
+    const r = DATA[key];
+    el("text", { x: R, y: y0 - 4, "text-anchor": "end", class: "num axis" }, svg, `utilisation ${r.util}% · avg ${r.eff_avg} MHz of work at ${r.clk_avg} MHz clock`);
+    [0, 250, 500].forEach(v => {
+      el("line", { x1: L, x2: R, y1: y(v), y2: y(v), stroke: css("--grid"), "stroke-width": 1 }, svg);
+      el("text", { x: L - 8, y: y(v) + 4, "text-anchor": "end", class: "axis num" }, svg, v);
+    });
+    const pts = r.bins.map((b, i) => [x(i), y(b[0])]);
+    el("path", { d: `M${L},${yb}` + pts.map(p => `L${p[0].toFixed(1)},${p[1].toFixed(1)}`).join("") + `L${R},${yb}Z`, fill: css("--npu-wash") }, svg);
+    el("path", { d: "M" + pts.map(p => `${p[0].toFixed(1)},${p[1].toFixed(1)}`).join("L"), fill: "none", stroke: css("--npu"), "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": "round" }, svg);
+    el("line", { x1: L, x2: R, y1: yb, y2: yb, stroke: css("--ink-3"), "stroke-width": 1 }, svg);
+    if (li === runs.length - 1) for (let s = 0; s <= 10; s += 2) el("text", { x: L + (R - L) * s / 10, y: yb + 18, "text-anchor": "middle", class: "axis num" }, svg, s + " s");
+    const cross = el("line", { y1: y0, y2: yb, stroke: css("--ink-3"), "stroke-width": 1, opacity: 0 }, svg);
+    const dot = el("circle", { r: 4.5, fill: css("--npu"), stroke: css("--surface"), "stroke-width": 2, opacity: 0 }, svg);
+    const hit = el("rect", { x: L, y: y0, width: R - L, height: laneH, fill: "transparent" }, svg);
+    hit.addEventListener("mousemove", ev => {
+      const pt = svg.createSVGPoint(); pt.x = ev.clientX; pt.y = ev.clientY;
+      const p = pt.matrixTransform(svg.getScreenCTM().inverse());
+      const i = Math.max(0, Math.min(nb - 1, Math.round((p.x - L) / (R - L) * (nb - 1))));
+      const b = r.bins[i];
+      cross.setAttribute("x1", x(i)); cross.setAttribute("x2", x(i)); cross.setAttribute("opacity", 1);
+      dot.setAttribute("cx", x(i)); dot.setAttribute("cy", y(b[0])); dot.setAttribute("opacity", 1);
+      showTip(panel, svg, x(i), y(b[0]), `${name} · ${(i * 0.05).toFixed(2)}–${(i * 0.05 + 0.05).toFixed(2)} s<br>work <b>${b[0]} MHz</b> · clock <b>${b[1] ?? "–"} MHz</b>`);
+    });
+    hit.addEventListener("mouseleave", () => { cross.setAttribute("opacity", 0); dot.setAttribute("opacity", 0); hideTip(panel); });
+  });
+  table("sysTbl", ["Capture", "Window (s)", "Active (s)", "Utilisation", "Avg work (MHz)", "Avg clock (MHz)"],
+    runs.map(([k, n]) => [n, DATA[k].total_s, DATA[k].active_s, DATA[k].util + "%", DATA[k].eff_avg, DATA[k].clk_avg]));
+}
+
+/* ---------- zoom ---------- */
+function drawZoom() {
+  const svg = document.getElementById("zoomSvg"); svg.innerHTML = "";
+  const panel = document.getElementById("zoom");
+  const L = 46, R = 425, T = 14, B = 200, ymax = 1400, z = DATA.npu_zoom;
+  const x = t => L + (R - L) * t / 400, y = v => B - (B - T) * v / ymax;
+  [0, 700, 1400].forEach(v => {
+    el("line", { x1: L, x2: R, y1: y(v), y2: y(v), stroke: css("--grid"), "stroke-width": 1 }, svg);
+    el("text", { x: L - 8, y: y(v) + 4, "text-anchor": "end", class: "axis num" }, svg, v);
+  });
+  const pts = z.map(p => [x(p[0]), y(p[1])]);
+  el("path", { d: `M${L},${B}` + pts.map(p => `L${p[0].toFixed(1)},${p[1].toFixed(1)}`).join("") + `L${R},${B}Z`, fill: css("--npu-wash") }, svg);
+  el("path", { d: "M" + pts.map(p => `${p[0].toFixed(1)},${p[1].toFixed(1)}`).join("L"), fill: "none", stroke: css("--npu"), "stroke-width": 1.5, "stroke-linejoin": "round" }, svg);
+  el("line", { x1: L, x2: R, y1: B, y2: B, stroke: css("--ink-3"), "stroke-width": 1 }, svg);
+  [0, 100, 200, 300, 400].forEach(t => el("text", { x: x(t), y: B + 18, "text-anchor": "middle", class: "axis num" }, svg, t + " ms"));
+  el("text", { x: L, y: B + 36, class: "axis" }, svg, "MHz of work per 1 ms sample, from t = 3.0 s");
+  const hit = el("rect", { x: L, y: T, width: R - L, height: B - T, fill: "transparent" }, svg);
+  const dot = el("circle", { r: 4.5, fill: css("--npu"), stroke: css("--surface"), "stroke-width": 2, opacity: 0 }, svg);
+  hit.addEventListener("mousemove", ev => {
+    const pt = svg.createSVGPoint(); pt.x = ev.clientX; pt.y = ev.clientY;
+    const p = pt.matrixTransform(svg.getScreenCTM().inverse());
+    const t = (p.x - L) / (R - L) * 400; let best = z[0];
+    for (const q of z) if (Math.abs(q[0] - t) < Math.abs(best[0] - t)) best = q;
+    dot.setAttribute("cx", x(best[0])); dot.setAttribute("cy", y(best[1])); dot.setAttribute("opacity", 1);
+    showTip(panel, svg, x(best[0]), y(best[1]), `${best[0]} ms · <b>${best[1]} MHz</b> of work`);
+  });
+  hit.addEventListener("mouseleave", () => { dot.setAttribute("opacity", 0); hideTip(panel); });
+}
+
+/* ---------- clock share ---------- */
+function drawClock() {
+  const svg = document.getElementById("clockSvg"); svg.innerHTML = "";
+  const panel = document.getElementById("clock");
+  const levels = [["365", "--o1"], ["941", "--o2"], ["1171", "--o3"], ["1306", "--o4"]];
+  document.getElementById("clockLegend").innerHTML = levels.map(([l, c]) => `<span><i class="sw box" style="background:var(${c})"></i>${l} MHz</span>`).join("");
+  const rows = [["Nothing running", { "365": 100 }], ["NCM on the CPU", { "365": 100 }], ["NCM on the NPU", DATA.clock_share_run2]];
+  const L = 120, R = 420, bh = 22, row = 44, top = 10, x = v => (R - L) * v / 100;
+  rows.forEach(([name, share], i) => {
+    const y = top + i * row; let cx = L;
+    el("text", { x: L - 10, y: y + bh / 2 + 4, "text-anchor": "end" }, svg, name);
+    const segs = levels.filter(([l]) => share[l] > 0);
+    segs.forEach(([l, c], j) => {
+      const w = x(share[l]), last = j === segs.length - 1, gapw = last ? 0 : 2;
+      const shape = last ? el("path", { d: roundRight(cx, y, Math.max(w, 1), bh, 4), fill: css(c) }, svg)
+                         : el("rect", { x: cx, y, width: Math.max(w - gapw, 1), height: bh, fill: css(c) }, svg);
+      const hit = el("rect", { x: cx, y: y - 4, width: Math.max(w, 6), height: bh + 8, fill: "transparent" }, svg);
+      const mid = cx + w / 2;
+      hit.addEventListener("mousemove", () => showTip(panel, svg, mid, y, `${name}<br><b>${l} MHz</b> for ${share[l]}% of the time`));
+      hit.addEventListener("mouseleave", () => hideTip(panel));
+      cx += w;
+    });
+    const main = segs.reduce((a, b) => share[a[0]] >= share[b[0]] ? a : b);
+    if (name === "NCM on the NPU") el("text", { x: L + 8, y: y + bh / 2 + 4, style: "fill:#fff", class: "num" }, svg, `941 MHz · ${share["941"]}%`);
+    else el("text", { x: L + 8, y: y + bh / 2 + 4, style: `fill:${css("--ink")}`, class: "num" }, svg, "365 MHz · 100%");
+  });
+  el("text", { x: L, y: top + rows.length * row + 4, class: "axis" }, svg, "NPU run: 1171 MHz 4.2% · 1306 MHz 2.0%");
+}
+
+/* ---------- accuracy ---------- */
+const ACC = [
+  { name: "NPU 16-bit mixed", c: "--npu", v: [100, 98, 91, 93, 94, 93, 93, 95, 95, 95, 95, 98], dec: "99.7%" },
+  { name: "NPU 8-bit", c: "--s2", v: [100, 83, 59, 76, 79, 77, 82, 85, 79, 80, 83, 92], dec: "99.4%" },
+  { name: "CPU INT8 (laptop check)", c: "--s3", v: [100, 100, 94, 92, 97, 98, 96, 98, 99, 98, 100, 100], dec: "–" },
+];
+const LEVEL_SIZES = [1, 8, 16, 24, 32, 40, 52, 64, 76, 92, 108, 128];
+function drawAcc() {
+  const svg = document.getElementById("accSvg"); svg.innerHTML = "";
+  const panel = document.getElementById("acc");
+  const L = 50, R = 760, T = 12, B = 280, ymin = 50, ymax = 100;
+  const x = i => L + (R - L) * i / 11, y = v => B - (B - T) * (v - ymin) / (ymax - ymin);
+  [50, 60, 70, 80, 90, 100].forEach(v => {
+    el("line", { x1: L, x2: R, y1: y(v), y2: y(v), stroke: css("--grid"), "stroke-width": 1 }, svg);
+    el("text", { x: L - 8, y: y(v) + 4, "text-anchor": "end", class: "axis num" }, svg, v + "%");
+  });
+  LEVEL_SIZES.forEach((n, i) => el("text", { x: x(i), y: B + 18, "text-anchor": "middle", class: "axis num" }, svg, i + 1));
+  el("text", { x: (L + R) / 2, y: B + 38, "text-anchor": "middle", class: "axis" }, svg, "Level (1 = coarsest, 1 code; 12 = finest, 128 codes)");
+  ACC.forEach(s => {
+    el("path", { d: "M" + s.v.map((v, i) => `${x(i)},${y(v)}`).join("L"), fill: "none", stroke: css(s.c), "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": "round" }, svg);
+    s.v.forEach((v, i) => el("circle", { cx: x(i), cy: y(v), r: 4, fill: css(s.c), stroke: css("--surface"), "stroke-width": 2 }, svg));
+  });
+  const ends = ACC.map(s => ({ s, y: y(s.v[11]) })).sort((a, b) => a.y - b.y);
+  for (let i = 1; i < ends.length; i++) if (ends[i].y - ends[i - 1].y < 16) ends[i].y = ends[i - 1].y + 16;
+  ends.forEach(e => {
+    el("circle", { cx: R + 14, cy: e.y - 4, r: 4, fill: css(e.s.c) }, svg);
+    el("text", { x: R + 24, y: e.y, class: "num" }, svg, `${e.s.v[11]}%  ${e.s.name.replace(" (laptop check)", "")}`);
+  });
+  const lowY = y(59);
+  el("text", { x: x(2) + 10, y: lowY + 4, class: "num" }, svg, "59% at level 3");
+  const cross = el("line", { y1: T, y2: B, stroke: css("--ink-3"), "stroke-width": 1, opacity: 0 }, svg);
+  const hit = el("rect", { x: L - 20, y: T, width: R - L + 40, height: B - T, fill: "transparent" }, svg);
+  hit.addEventListener("mousemove", ev => {
+    const pt = svg.createSVGPoint(); pt.x = ev.clientX; pt.y = ev.clientY;
+    const p = pt.matrixTransform(svg.getScreenCTM().inverse());
+    const i = Math.max(0, Math.min(11, Math.round((p.x - L) / (R - L) * 11)));
+    cross.setAttribute("x1", x(i)); cross.setAttribute("x2", x(i)); cross.setAttribute("opacity", 1);
+    showTip(panel, svg, x(i), T + 10, `Level ${i + 1} · ${LEVEL_SIZES[i]} codes<br>` + ACC.map(s => `${s.name}: <b>${s.v[i]}%</b>`).join("<br>"));
+  });
+  hit.addEventListener("mouseleave", () => { cross.setAttribute("opacity", 0); hideTip(panel); });
+  table("accTbl", ["Build", ...LEVEL_SIZES.map((_, i) => "L" + (i + 1)), "Decoder"], ACC.map(s => [s.name, ...s.v, s.dec]));
+}
+
+function drawAll() { drawSpeed(); drawSplit(); drawLanes(); drawZoom(); drawClock(); drawAcc(); }
+drawAll();
+window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", drawAll);
+new MutationObserver(drawAll).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+</script>

@@ -1,0 +1,33 @@
+# Environments and caches
+.venv/
+__pycache__/
+*.pyc
+torchinductor_*/
+.smoke/
+
+# Data derived from TinyStories (re-create with prepare_data.py)
+data/
+
+# Large model files: share via GitHub Releases instead
+ckpt/
+ckpt_v2/
+edge/
+edge_v2/
+*.pt
+*.onnx
+*.npz
+
+# NPU build outputs (made by the Qualcomm toolchain; re-create with npu/build.sh)
+npu/build/
+*.dlc
+*.bin
+
+# Qualcomm SDK files: never commit (license forbids standalone redistribution)
+qnn/
+inc/
+qairt*/
+libQnn*.so
+sysMonApp*
+
+# Logs with machine paths and profiler output
+logs/
